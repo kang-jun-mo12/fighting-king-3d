@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Cache-Control" content="no-cache">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>격투왕 3D</title>
+<link rel="stylesheet" href="style.css?v=4">
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<!-- 화면 효과 -->
+<div id="flash"></div>
+<div id="vignette"></div>
+<div id="floaters"></div>
+
+<!-- 전투 HUD -->
+<div id="hud" class="hidden">
+  <div class="side p1">
+    <div class="nameRow"><span class="tag">P1</span><span class="name" id="n1"></span><span class="wins" id="w1"><i></i><i></i></span></div>
+    <div class="hp"><div class="lag" id="lag1"></div><div class="fill" id="hp1"></div></div>
+    <div class="skills" id="skills1"></div>
+    <div class="ult"><div class="ultbar"><div class="ultfill" id="ult1"></div></div><span id="ultl1">궁극기</span></div>
+  </div>
+  <div id="timer">60</div>
+  <div class="side p2">
+    <div class="nameRow"><span class="wins" id="w2"><i></i><i></i></span><span class="name" id="n2"></span><span class="tag">P2</span></div>
+    <div class="hp"><div class="lag" id="lag2"></div><div class="fill" id="hp2"></div></div>
+    <div class="skills" id="skills2"></div>
+    <div class="ult"><span id="ultl2">궁극기</span><div class="ultbar"><div class="ultfill" id="ult2"></div></div></div>
+  </div>
+  <div class="combo" id="combo1"></div>
+  <div class="combo right" id="combo2"></div>
+  <div id="controls">
+    <span><b>P1</b> A/D 이동 · W/S 옆이동 · 왼Shift+방향 달리기 · W두번 점프 · Tab 막기 · E 펀치 · Space 킥 · R/F/Q 스킬 · T 궁극기</span>
+    <span><b>P2</b> ←/→ 이동 · ↑/↓ 옆이동 · 0+방향 달리기 · ↑두번 점프 · 7 막기 · 8 펀치 · 1 킥 · 9/4/5 스킬 · 6 궁극기</span>
+  </div>
+</div>
+
+<div id="cutin" class="hidden"><div class="band"><div class="who" id="cutWho"></div><div class="what" id="cutWhat"></div></div></div>
+<div id="announce"></div>
+
+<!-- 타이틀 -->
+<div id="title" class="hidden">
+  <div class="logo">격투왕 <em>3D</em></div>
+  <div class="sub">LAVA ARENA</div>
+  <div class="cards">
+    <div class="card p1">
+      <h3>P1 · 드래곤 워리어</h3>
+      <p>이동 A/D · <b class="k">왼Shift</b>+아무 방향 = 달리기 (앞·뒤·옆) · 옆이동 W/S · W 두 번 = 점프</p>
+      <p>Tab 막기 · <b class="k">E</b> 펀치 · <b class="k">Space</b> 킥 (펀치·킥을 섞어 연타하면 콤보)</p>
+      <ul>
+        <li><b>R</b> 플라즈마 기공파 — 에너지탄 (공중이면 아래로 사선)</li>
+        <li><b>F</b> 드래곤 브레스 — 화염 방사, 고개를 돌려 쓸어버림</li>
+        <li><b>Q</b> 천공 강하 — 날아올라 상대에게 불꽃 다이브</li>
+        <li><b>T</b> 궁극기 · 메테오 스톰 — 하늘에서 운석 폭격</li>
+      </ul>
+    </div>
+    <div class="card p2">
+      <h3>P2 · 뮤턴트</h3>
+      <p>이동 ←/→ · <b class="k">0</b>+아무 방향 = 달리기 (앞·뒤·옆) · 옆이동 ↑/↓ · ↑ 두 번 = 점프</p>
+      <p>7 막기 · <b class="k">8</b> 펀치 · <b class="k">1</b> 킥 (숫자패드 가능, 섞어 연타하면 콤보)</p>
+      <ul>
+        <li><b>9</b> 광폭 회오리킥 — 막기를 부수며 추적 돌진</li>
+        <li><b>4</b> 대지 균열 — 땅을 내리쳐 바위 가시를 일직선으로</li>
+        <li><b>5</b> 지하 습격 — 땅속으로 파고들어 발밑에서 분출</li>
+        <li><b>6</b> 궁극기 · 지옥의 포효 — 주변 전체에 가시와 용암 폭발</li>
+      </ul>
+    </div>
+  </div>
+  <div class="hint">앞으로 달리면서 펀치 = 돌진 스트레이트 · 앞으로 달리면서 킥 = 뒤돌려차기 · 궁극기 게이지는 때리거나 맞으면 차요</div>
+  <div class="press">ENTER 키를 눌러 시작</div>
+  <div class="credits">맵: "Low Poly Lava Fighting Arena/Stage" by Umar (CC BY) · 캐릭터: "Sci-Fi Character - Dragon Warrior" by Spooky Iluha (CC BY-NC) · Mutant &amp; 애니메이션: Adobe Mixamo · 이펙트·효과음: Kenney (CC0), OpenGameArt rubberduck · artisticdude (CC0)</div>
+</div>
+
+<div id="pause" class="hidden"><div>일시정지</div><small>P 키를 눌러 계속 · ESC 타이틀로</small></div>
+
+<div id="matchend" class="hidden"><div id="meText"></div><div id="meScore"></div><small>R 다시하기 · ESC 타이틀로</small></div>
+
+<!-- 로딩 -->
+<div id="loading">
+  <div class="logo">격투왕 <em>3D</em></div>
+  <div class="bar"><div id="loadFill"></div></div>
+  <div id="loadText">에셋 불러오는 중...</div>
+</div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "./lib/three/build/three.module.js",
+  "three/addons/": "./lib/three/examples/jsm/"
+} }
+</script>
+<script type="module" src="game.js?v=4"></script>
+</body>
+</html>
