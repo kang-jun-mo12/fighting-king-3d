@@ -1825,6 +1825,7 @@ function simHash() {
   let h = 2166136261; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
   return h >>> 0;
 }
+const NET_POINTER = 'https://api.github.com/repos/kang-jun-mo12/fighting-king-3d/contents/server.json?ref=server';   // 고정 링크용 서버 주소 파일
 const NET = {
   ws: null, url: '', connected: false, menuOpen: false, active: false, role: 0, seed: 0, D: 4,
   simF: 0, sendF: 0, inputs: [new Map(), new Map()], cur: [NO_INPUT, NO_INPUT], curBits: [0, 0], carry: [0, 0], re: [false, false],
@@ -1866,6 +1867,15 @@ const NET = {
       const r = await fetch('status', { cache: 'no-store' });
       if (r.ok && (await r.json()).ok) return this.connect(location.origin);
     } catch {}
+    this.status('방장 서버를 찾는 중...'); this.show(null);
+    try {   // 고정 링크 : 방장 서버가 켜질 때 GitHub 저장소(server 브랜치)에 적어 둔 주소
+      const r = await fetch(NET_POINTER + '&t=' + Date.now(), { cache: 'no-store' });
+      if (r.ok) {
+        const j = await r.json(), info = JSON.parse(atob(String(j.content).replace(/\s/g, '')));
+        if (info.url) { this.fromPointer = true; return this.connect(info.url); }
+        this.show('netServerRow'); this.status('방장 서버가 꺼져 있어요. 서버가 켜지면 다시 눌러 주세요. (주소를 직접 넣어도 돼요)', 'bad'); return;
+      }
+    } catch {}
     this.show('netServerRow'); this.status('방장 서버 주소를 넣어 주세요 (서버 창에 나온 trycloudflare 링크)');
     try { const last = localStorage.getItem('fk3d_server'); if (last) $('netServer').value = last; } catch {}
     $('netServer').focus();
@@ -1890,7 +1900,7 @@ const NET = {
       clearTimeout(timer);
       const was = this.connected; this.connected = false; this.ws = null;
       if (this.active) this.endOnline('서버와 연결이 끊겼어요');
-      if (this.menuOpen) { this.show('netServerRow'); this.status(was ? '서버와 연결이 끊겼어요. 서버 창이 켜져 있는지 확인해 주세요.' : '서버에 연결하지 못했어요. 주소를 확인하거나 서버 창이 켜져 있는지 확인해 주세요.', 'bad'); }
+      if (this.menuOpen) { this.show('netServerRow'); this.status(was ? '서버와 연결이 끊겼어요. 서버 창이 켜져 있는지 확인해 주세요.' : this.fromPointer ? '방장 서버에 연결하지 못했어요. 서버가 꺼졌거나 방금 켜졌다면 잠시 뒤 다시 시도해 주세요.' : '서버에 연결하지 못했어요. 주소를 확인하거나 서버 창이 켜져 있는지 확인해 주세요.', 'bad'); this.fromPointer = false; }
     };
   },
   send(o) { if (this.ws && this.ws.readyState === 1) this.ws.send(JSON.stringify(o)); },
