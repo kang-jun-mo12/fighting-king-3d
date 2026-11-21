@@ -32,7 +32,13 @@ const TEX_NAMES = ['flame_02', 'fire_02', 'circle_05', 'magic_05', 'flame_03', '
 const V3 = THREE.Vector3, Q = THREE.Quaternion;
 const $ = id => document.getElementById(id);
 const clamp = (v, a, b) => v < a ? a : (v > b ? b : v);
-const rand = (a, b) => a + Math.random() * (b - a);
+let RNG = Math.random;   // 온라인 대전 중 게임 계산(step) 동안에만 두 PC가 같은 씨앗의 난수를 씀
+const rand = (a, b) => a + RNG() * (b - a);
+const vrand = (a, b) => a + Math.random() * (b - a);   // 화면 · 소리 전용 (게임 결과에 영향 없음)
+function makeRng(seed) {   // mulberry32
+  let st = seed >>> 0;
+  return () => { st = (st + 0x6D2B79F5) >>> 0; let t = st; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
 const lerp = (a, b, t) => a + (b - a) * t;
 const smooth = t => { t = clamp(t, 0, 1); return t * t * (3 - 2 * t); };
 const angDiff = (a, b) => { let d = b - a; while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2; return d; };
@@ -140,24 +146,24 @@ const sfx = {
     const g = c.createGain(); g.gain.setValueAtTime(gain, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
     o.connect(g); g.connect(this.master); o.start(t); o.stop(t + dur + 0.05);
   },
-  whoosh(big) { this.play('swing', big ? 0.7 : 0.5, big ? rand(0.7, 0.85) : rand(0.95, 1.25)); },
-  hit(heavy) { this.play(heavy ? 'hitheavy' : 'hit', heavy ? 1 : 0.85, rand(0.9, 1.1)); if (heavy) { this.play('explode', 0.3, rand(1.2, 1.4)); this.tone(0.25, 110, 40, 0.5); } },
-  block() { this.play('block', 0.75, rand(0.95, 1.1)); this.play('metal', 0.25, 1.4); },
-  fire() { this.play('plasma', 0.45, rand(0.75, 0.9)); this.play('fire', 0.7, 1.1); },
-  flame() { this.play('fire', 0.4, rand(0.85, 1.15)); },
-  boom() { this.play('bigboom', 0.9, rand(0.9, 1.05)); this.play('explode', 0.6, rand(0.8, 1)); },
-  crack() { this.play('rockbreak', 0.8, rand(0.9, 1.1)); this.play('rockhit', 0.5); },
-  rockHit() { this.play('rockhit', 0.45, rand(0.8, 1.2)); },
+  whoosh(big) { this.play('swing', big ? 0.7 : 0.5, big ? vrand(0.7, 0.85) : vrand(0.95, 1.25)); },
+  hit(heavy) { this.play(heavy ? 'hitheavy' : 'hit', heavy ? 1 : 0.85, vrand(0.9, 1.1)); if (heavy) { this.play('explode', 0.3, vrand(1.2, 1.4)); this.tone(0.25, 110, 40, 0.5); } },
+  block() { this.play('block', 0.75, vrand(0.95, 1.1)); this.play('metal', 0.25, 1.4); },
+  fire() { this.play('plasma', 0.45, vrand(0.75, 0.9)); this.play('fire', 0.7, 1.1); },
+  flame() { this.play('fire', 0.4, vrand(0.85, 1.15)); },
+  boom() { this.play('bigboom', 0.9, vrand(0.9, 1.05)); this.play('explode', 0.6, vrand(0.8, 1)); },
+  crack() { this.play('rockbreak', 0.8, vrand(0.9, 1.1)); this.play('rockhit', 0.5); },
+  rockHit() { this.play('rockhit', 0.45, vrand(0.8, 1.2)); },
   rumble() { this.play('rockfall', 0.75, 0.75); },
   slam() { this.play('slam', 0.9, 0.75); this.tone(0.4, 90, 30, 0.7); },
-  roar(who) { if (who === 'dragon') this.play('monster', 1, rand(0.7, 0.8)); else this.play('roar', 1, rand(0.85, 1)); },
+  roar(who) { if (who === 'dragon') this.play('monster', 1, vrand(0.7, 0.8)); else this.play('roar', 1, vrand(0.85, 1)); },
   whistle() { this.tone(0.6, 1500, 280, 0.06, 'triangle'); this.play('fire', 0.25, 1.6); },
   flap() { this.play('flap', 0.9, 0.55); this.play('swing', 0.35, 0.5); },
   breakGuard() { this.play('glass', 0.7); this.play('metal', 0.6, 0.8); },
   ult() { this.play('charge', 0.9, 0.8); this.play('bigboom', 0.5, 1.2); },
-  step() { this.play('step', 0.3, rand(0.85, 1.1)); },
-  land(heavy) { this.play('land', heavy ? 0.85 : 0.5, rand(0.8, 1)); },
-  hurt(f, force) { if (!force && Math.random() < 0.45) return; if (f.voice === 'mech') this.play('grunt', 0.6, rand(0.6, 0.7)); else this.play('hurt', 0.75, rand(0.8, 0.95)); },
+  step() { this.play('step', 0.3, vrand(0.85, 1.1)); },
+  land(heavy) { this.play('land', heavy ? 0.85 : 0.5, vrand(0.8, 1)); },
+  hurt(f, force) { if (!force && Math.random() < 0.45) return; if (f.voice === 'mech') this.play('grunt', 0.6, vrand(0.6, 0.7)); else this.play('hurt', 0.75, vrand(0.8, 0.95)); },
   vo(n) { this.play('vo_' + n, 1.15); },
 };
 
@@ -208,7 +214,7 @@ class Particles {
     this.vel[i3] = v.x; this.vel[i3 + 1] = v.y; this.vel[i3 + 2] = v.z;
     this.col[i3] = c.r; this.col[i3 + 1] = c.g; this.col[i3 + 2] = c.b;
     this.life[i] = life; this.maxLife[i] = life; this.s0[i] = s0; this.s1[i] = s1; this.drag[i] = drag; this.grav[i] = grav;
-    this.size[i] = s0; this.alpha[i] = 0; this.rot[i] = Math.random() * 6.283; this.spin[i] = spin || rand(-2, 2);
+    this.size[i] = s0; this.alpha[i] = 0; this.rot[i] = Math.random() * 6.283; this.spin[i] = spin || vrand(-2, 2);
   }
   update(dt) {
     if (this.n === 0 && !this.lastN) return;
@@ -757,10 +763,11 @@ class Fighter {
       return;
     }
     const a = _v3.set(opp.pos.x - this.pos.x, 0, opp.pos.z - this.pos.z).normalize();
+    const net = inp.fIn !== undefined;   // 온라인 : 보내기 전에 이미 '앞/뒤 · 왼/오른쪽'으로 바꿔 둔 입력
     const screenSign = Math.sign(a.dot(camRight)) || 1;
-    const fIn = ((inp.right ? 1 : 0) - (inp.left ? 1 : 0)) * screenSign;
-    const sIn = (inp.up ? 1 : 0) - (inp.down ? 1 : 0);
-    const tan = _v2.set(-a.z, 0, a.x); if (tan.dot(camFwd) < 0) tan.negate();
+    const fIn = net ? inp.fIn : ((inp.right ? 1 : 0) - (inp.left ? 1 : 0)) * screenSign;
+    const sIn = net ? inp.sIn : (inp.up ? 1 : 0) - (inp.down ? 1 : 0);
+    const tan = _v2.set(-a.z, 0, a.x); if (!net && tan.dot(camFwd) < 0) tan.negate();
     if (this.jumpBuf > 0) {
       this.jumpBuf = 0; this.vel.set(a.x * fIn * 3.6, JUMP_VY, a.z * fIn * 3.6); this.pos.y = 0.001; this.setState('jump');
       const ci = CI.jump, air = 2 * JUMP_VY / GRAV;
@@ -1436,6 +1443,7 @@ function clearAnnounce() { $('announce').className = ''; $('announce').textConte
 // =====================================================================
 const held = new Set(), pressed = new Set();
 addEventListener('keydown', e => {
+  if (e.target && e.target.tagName === 'INPUT') { if (e.code === 'Escape') e.target.blur(); else if (e.code === 'Enter' || e.code === 'NumpadEnter') NET.inputEnter(e.target); return; }
   if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'Tab'].includes(e.code)) e.preventDefault();
   sfx.init();
   if (!held.has(e.code)) pressed.add(e.code);
@@ -1486,7 +1494,7 @@ function updateCamera(dt, mode) {
   camPos.lerp(desiredPos, 1 - Math.exp(-dt * kPos)); camLook.lerp(desiredLook, 1 - Math.exp(-dt * kLook));
   camFov = lerp(camFov, desiredFov, 1 - Math.exp(-dt * 6));
   camera.position.copy(camPos);
-  if (shake > 0) { camera.position.x += rand(-1, 1) * shake * 0.3; camera.position.y += rand(-1, 1) * shake * 0.3; }
+  if (shake > 0) { camera.position.x += vrand(-1, 1) * shake * 0.3; camera.position.y += vrand(-1, 1) * shake * 0.3; }
   camera.lookAt(camLook);
   fovKick *= Math.pow(0.86, dt * 60);
   camera.fov = camFov - fovKick; camera.updateProjectionMatrix();
@@ -1503,7 +1511,10 @@ const G = {
   opp(f) { return f === this.f[0] ? this.f[1] : this.f[0]; },
   menuKey(c) {
     if (this.phase === 'loading') return;
-    if (c === 'Escape') { this.goTitle(); return; }
+    if (NET.menuOpen) { NET.menuKey(c); return; }
+    if (c === 'Escape') { if (NET.active) NET.leave(); this.goTitle(); return; }
+    if (NET.active) return;   // 온라인 대전 중엔 일시정지 · 다시하기 키를 쓰지 않음 (재대결은 입력으로 처리)
+    if (c === 'KeyO' && this.phase === 'title') { NET.openMenu(); return; }
     if ((c === 'Enter' || c === 'NumpadEnter') && this.phase === 'title') this.startMatch();
     else if (c === 'KeyR' && this.phase === 'matchend') this.startMatch();
     else if (c === 'KeyP' && this.phase === 'fight') { this.paused = !this.paused; $('pause').classList.toggle('hidden', !this.paused); }
@@ -1514,6 +1525,7 @@ const G = {
     for (const [i, f] of this.f.entries()) { f.wins = 0; f.reset(i ? 2.2 : -2.2); }
     clearAnnounce();
     $('title').classList.remove('hidden'); $('hud').classList.add('hidden'); $('pause').classList.add('hidden'); $('matchend').classList.add('hidden');
+    $('netHud').classList.add('hidden');
   },
   startMatch() { this.round = 1; for (const f of this.f) f.wins = 0; $('matchend').classList.add('hidden'); this.startRound(); },
   startRound() {
@@ -1558,7 +1570,7 @@ function step() {
     updateCine(SDT);
     for (const f of G.f) { f.comboTimer = Math.max(0, f.comboTimer - SDT); if (f.shownHp > f.hp) f.shownHp = Math.max(f.hp, f.shownHp - 30 * SDT); }
   } else if (G.phase !== 'title') {
-    const i1 = fight ? readInput(KEYS.p1) : NO_INPUT, i2 = fight ? readInput(KEYS.p2) : NO_INPUT;
+    const i1 = fight ? inputFor(0) : NO_INPUT, i2 = fight ? inputFor(1) : NO_INPUT;
     for (const [f, inp, o] of [[a, i1, b], [b, i2, a]]) {
       if (f.state === 'ultStart') { f.t += SDT; updateUltStart(f, o); if (cine.active) break; f.pos.addScaledVector(f.vel, SDT); }
       else if (f.state === 'ultRecover') { f.t += SDT; f.vel.multiplyScalar(0.8); f.pos.addScaledVector(f.vel, SDT); if (f.t > 0.55) f.toNeutral(); }
@@ -1567,7 +1579,8 @@ function step() {
     if (!cine.active) separate(a, b);
   } else { for (const f of G.f) { f.faceOpp(G.opp(f), 6); f.anim.loco('idle', 1); } }
   updateProjectiles(SDT);
-  for (const f of G.f) f.animAcc = (f.animAcc || 0) + SDT;
+  if (NET.active) { for (const f of G.f) { f.updateVisual(SDT); f.group.updateMatrixWorld(true); } }   // 온라인 : 손·발 위치가 두 PC에서 같도록
+  else for (const f of G.f) f.animAcc = (f.animAcc || 0) + SDT;
 
   if (G.phase === 'intro') {
     if (G.announced === 0 && G.phaseT > 0.3) { announce(G.round >= 3 ? 'FINAL ROUND' : 'ROUND ' + G.round); sfx.vo(G.round >= 3 ? 'final_round' : 'round_' + G.round); G.announced = 1; }
@@ -1587,6 +1600,7 @@ function step() {
         const w = a.wins >= WINS_NEEDED ? a : b;
         $('meText').textContent = (w === a ? 'P1 ' : 'P2 ') + w.name + ' 최종 승리!'; $('meScore').textContent = a.wins + '  :  ' + b.wins;
         $('matchend').classList.remove('hidden'); sfx.vo('you_win');
+        $('meHelp').textContent = NET.active ? 'R 재대결 (둘 다 눌러야 시작) · ESC 나가기' : 'R 다시하기 · ESC 타이틀로';
       } else { G.round++; G.startRound(); }
     }
   }
@@ -1728,7 +1742,7 @@ async function main() {
   const sc = innerHeight * 0.9 * renderer.getPixelRatio(); for (const k in P) P[k].mat.uniforms.uScale.value = sc;
 
   window.G = G; window.THREE = THREE; window.scene = scene; window.camera = camera;
-  window.DBG = { SEE: SEE_U, bloom, composer, renderer, render: () => render(),
+  window.DBG = { NET, SEE: SEE_U, bloom, composer, renderer, render: () => render(),
     run(n, keys = []) {
       for (let i = 0; i < n; i++) { keys.forEach(k => { if (!held.has(k)) pressed.add(k); held.add(k); }); if (step() !== false) pressed.clear(); flushVisual(); updateCamera(DT, camMode()); }
       keys.forEach(k => held.delete(k)); updateHud(); render();
@@ -1745,6 +1759,7 @@ async function main() {
 
   $('loading').classList.add('hidden');
   G.goTitle();
+  if (new URLSearchParams(location.search).get('net')) NET.openMenu();   // ?net=quick : 바로 온라인 빠른 매칭
   requestAnimationFrame(loop);
 }
 
@@ -1780,7 +1795,7 @@ function updateSee() {
   if (b) SEE_U.uSeeB.value.set(b.pos.x, b.pos.y + 1.05, b.pos.z);
 }
 function flushVisual() {   // 그리기 직전에 한 번만 : 뼈대 애니메이션 · 파티클 갱신
-  for (const f of G.f) { f.updateVisual(f.animAcc || 0); f.animAcc = 0; }
+  if (!NET.active) for (const f of G.f) { f.updateVisual(f.animAcc || 0); f.animAcc = 0; }
   if (G.fxAcc) { for (const k in P) P[k].update(G.fxAcc); G.fxAcc = 0; }
 }
 let renderCount = 0;
@@ -1788,6 +1803,258 @@ function render() { flushVisual(); updateSee(); renderer.shadowMap.needsUpdate =
 function camMode() { return cine.active ? 'cine' : G.phase === 'title' ? 'title' : G.phase === 'intro' ? 'intro' : (G.phase === 'roundend' && G.phaseT < 2) ? 'ko' : 'fight'; }
 const QLOCK = new URLSearchParams(location.search).has('lockq');   // 테스트용 : 자동 품질 낮추기 끄기
 let last = performance.now(), acc = 0, frameAvg = 16, lowFrames = 0, qLevel = 0;
+// =====================================================================
+//  온라인 대전 (지연 기반 록스텝)
+//   - 중계 서버(server/server.js)를 거쳐 두 사람이 '매 프레임 입력'만 주고받음
+//   - 두 PC가 같은 입력 · 같은 난수 씨앗으로 같은 계산을 해서 똑같은 경기가 진행됨
+//   - 입력은 D 프레임 뒤에 적용 (D = 왕복 지연에 맞춰 자동 결정)
+// =====================================================================
+const NB = { F: 1, B: 2, SL: 4, SR: 8, GUARD: 16, RUN: 32, UPTAP: 64, ATK: 128, KICK: 256, S0: 512, S1: 1024, S2: 2048, ULT: 4096, RE: 8192 };
+const NB_PRESS = NB.UPTAP | NB.ATK | NB.KICK | NB.S0 | NB.S1 | NB.S2 | NB.ULT | NB.RE;
+const NET_KEYS = {};   // 온라인에선 P1 키 · P2 키 어느 쪽으로든 내 캐릭터를 조작
+for (const k in KEYS.p1) NET_KEYS[k] = [...KEYS.p1[k], ...KEYS.p2[k]];
+function netDecode(b) {
+  return { left: false, right: false, up: false, down: false, fIn: (b & NB.F ? 1 : 0) - (b & NB.B ? 1 : 0), sIn: (b & NB.SL ? 1 : 0) - (b & NB.SR ? 1 : 0),
+    upTap: !!(b & NB.UPTAP), guard: !!(b & NB.GUARD), run: !!(b & NB.RUN), attack: !!(b & NB.ATK), kick: !!(b & NB.KICK),
+    s0: !!(b & NB.S0), s1: !!(b & NB.S1), s2: !!(b & NB.S2), ult: !!(b & NB.ULT) };
+}
+function inputFor(i) { return NET.active ? NET.cur[i] : readInput(i ? KEYS.p2 : KEYS.p1); }
+function simHash() {
+  let str = G.phase + G.round + '|' + G.roundTime.toFixed(3);
+  for (const f of G.f) str += `|${f.hp.toFixed(2)},${f.meter.toFixed(2)},${f.pos.x.toFixed(3)},${f.pos.y.toFixed(3)},${f.pos.z.toFixed(3)},${f.state},${f.wins}`;
+  let h = 2166136261; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return h >>> 0;
+}
+const NET = {
+  ws: null, url: '', connected: false, menuOpen: false, active: false, role: 0, seed: 0, D: 4,
+  simF: 0, sendF: 0, inputs: [new Map(), new Map()], cur: [NO_INPUT, NO_INPUT], curBits: [0, 0], carry: [0, 0], re: [false, false],
+  rng: null, sums: new Map(), rsums: new Map(), desync: 0, fixF: null, fixSnap: null,
+  rtt: 0, pingSent: new Map(), pingId: 0, lastTick: 0, rttSamples: [], online: 0, startT: 0,
+
+  // ---------------- 화면 ----------------
+  el(id) { return $(id); },
+  show(part) { for (const id of ['netServerRow', 'netMenu', 'netWait']) $(id).classList.toggle('hidden', id !== part); },
+  status(t, cls = '') { const e = $('netStatus'); e.textContent = t; e.className = cls; },
+  openMenu() {
+    this.menuOpen = true; $('online').classList.remove('hidden'); $('title').classList.add('hidden');
+    if (this.connected) { this.show('netMenu'); this.status(`서버 연결됨 · 접속자 ${this.online}명`, 'ok'); return; }
+    this.autoServer();
+  },
+  closeMenu() {
+    this.menuOpen = false; $('online').classList.add('hidden');
+    if (!this.active) { this.send({ t: 'cancel' }); $('title').classList.remove('hidden'); }
+  },
+  menuKey(c) {
+    if (c === 'Escape') { if ($('netWait').classList.contains('hidden')) this.closeMenu(); else this.cancel(); }
+    else if (c === 'Digit1' && this.connected) this.quick();
+    else if (c === 'Digit2' && this.connected) this.create();
+  },
+  inputEnter(el) { if (el.id === 'netServer') this.connect(el.value); else if (el.id === 'netCode') this.join(el.value); },
+
+  // ---------------- 서버 찾기 · 연결 ----------------
+  wsUrlFrom(v) {
+    v = String(v || '').trim(); if (!v) return '';
+    if (/^wss?:\/\//.test(v)) return v.replace(/\/+$/, '') + (/\/ws$/.test(v) ? '' : '/ws');
+    let m = v.match(/^(https?):\/\/([^/?#]+)/); const host = m ? m[2] : v.replace(/[/?#].*$/, '');
+    const secure = m ? m[1] === 'https' : !/^(localhost|127\.|192\.168\.|10\.|\[?::1)/.test(host);
+    return (secure ? 'wss://' : 'ws://') + host + '/ws';
+  },
+  async autoServer() {
+    const q = new URLSearchParams(location.search).get('server');
+    if (q) return this.connect(q);
+    try {   // 중계 서버가 이 페이지를 직접 제공 중이면 같은 주소로 연결
+      const r = await fetch('status', { cache: 'no-store' });
+      if (r.ok && (await r.json()).ok) return this.connect(location.origin);
+    } catch {}
+    this.show('netServerRow'); this.status('방장 서버 주소를 넣어 주세요 (서버 창에 나온 trycloudflare 링크)');
+    try { const last = localStorage.getItem('fk3d_server'); if (last) $('netServer').value = last; } catch {}
+    $('netServer').focus();
+  },
+  connect(v) {
+    const url = this.wsUrlFrom(v); if (!url) return;
+    if (this.ws) { try { this.ws.onclose = null; this.ws.close(); } catch {} }
+    this.url = url; this.status('서버에 연결하는 중...'); this.show(null);
+    let ws;
+    try { ws = new WebSocket(url); } catch { this.status('주소가 올바르지 않아요', 'bad'); this.show('netServerRow'); return; }
+    this.ws = ws;
+    const timer = setTimeout(() => { if (!this.connected) { try { ws.close(); } catch {} } }, 8000);
+    ws.onopen = () => {
+      clearTimeout(timer); this.connected = true;
+      try { if (!/localhost|127\.0\.0\.1/.test(url)) localStorage.setItem('fk3d_server', v); } catch {}
+      this.status('서버 연결됨', 'ok'); this.show('netMenu');
+      const auto = new URLSearchParams(location.search).get('net');
+      if (auto === 'quick') this.quick();
+    };
+    ws.onmessage = e => this.onMsg(e.data);
+    ws.onclose = () => {
+      clearTimeout(timer);
+      const was = this.connected; this.connected = false; this.ws = null;
+      if (this.active) this.endOnline('서버와 연결이 끊겼어요');
+      if (this.menuOpen) { this.show('netServerRow'); this.status(was ? '서버와 연결이 끊겼어요. 서버 창이 켜져 있는지 확인해 주세요.' : '서버에 연결하지 못했어요. 주소를 확인하거나 서버 창이 켜져 있는지 확인해 주세요.', 'bad'); }
+    };
+  },
+  send(o) { if (this.ws && this.ws.readyState === 1) this.ws.send(JSON.stringify(o)); },
+  sendR(o) { if (this.ws && this.ws.readyState === 1) this.ws.send('{"t":"r",' + JSON.stringify(o).slice(1)); },
+
+  quick() { this.send({ t: 'quick' }); },
+  create() { this.send({ t: 'create' }); },
+  join(code) { code = String(code).trim(); if (!/^\d{4}$/.test(code)) { this.status('방 코드는 숫자 4자리예요', 'bad'); return; } this.send({ t: 'join', code }); },
+  cancel() { this.send({ t: 'cancel' }); this.show('netMenu'); this.status(`서버 연결됨 · 접속자 ${this.online}명`, 'ok'); },
+
+  onMsg(data) {
+    let m; try { m = JSON.parse(data); } catch { return; }
+    if (m.t === 'r') return this.onGame(m);
+    if (m.t === 'hello' || m.t === 'count') { this.online = m.online; if (this.menuOpen && !$('netMenu').classList.contains('hidden')) this.status(`서버 연결됨 · 접속자 ${this.online}명`, 'ok'); }
+    else if (m.t === 'wait') {
+      this.show('netWait');
+      $('netWaitText').innerHTML = m.mode === 'room' ? `방 코드 <b class="code">${m.code}</b><br>친구에게 이 코드를 알려 주세요. 기다리는 중...` : '상대를 찾는 중... (다른 사람이 빠른 매칭을 누르면 바로 시작돼요)';
+    }
+    else if (m.t === 'err') { this.status(m.msg, 'bad'); }
+    else if (m.t === 'idle') { this.show('netMenu'); }
+    else if (m.t === 'match') { this.role = m.role; this.seed = m.seed; this.prepare(); }
+    else if (m.t === 'left') { if (this.active || this.startT) this.endOnline('상대가 나갔어요'); else { this.show('netMenu'); this.status('상대가 나갔어요', 'bad'); } }
+    else if (m.t === 'pong') { const t0 = this.pingSent.get(m.id); if (t0) { this.srvRtt = performance.now() - t0; this.pingSent.delete(m.id); } }
+  },
+
+  // ---------------- 매칭 후 : 지연 측정 → 시작 ----------------
+  prepare() {
+    this.startT = performance.now(); this.rttSamples = [];
+    $('netWaitText').innerHTML = `상대를 찾았어요! 나는 <b>${this.role === 0 ? '드래곤 워리어 (P1)' : '뮤턴트 (P2)'}</b><br>연결 상태 확인 중...`; this.show('netWait');
+    if (this.role === 0) {
+      let n = 0;
+      const ping = () => { if (!this.startT || this.active) return; this.sendR({ k: 'ping', id: ++this.pingId, at: performance.now() }); if (++n < 8) setTimeout(ping, 80); };
+      ping();
+      setTimeout(() => {   // 응답이 다 안 와도 1.5초 뒤엔 시작
+        if (this.active || !this.startT) return;
+        const s = this.rttSamples.slice().sort((a, b) => a - b), med = s.length ? s[s.length >> 1] : 150;
+        const D = clamp(Math.ceil(med / 2 / (DT * 1000)) + 2, 3, 12);
+        this.sendR({ k: 'go', D }); this.start(D, med);
+      }, 1500);
+    }
+  },
+  onGame(m) {
+    if (m.k === 'in') { const q = this.inputs[1 - this.role]; for (let i = 0; i < m.b.length; i++) q.set(m.f + i, m.b[i]); }
+    else if (m.k === 'ping') this.sendR({ k: 'pong', id: m.id, at: m.at });
+    else if (m.k === 'pong') { const r = performance.now() - m.at; this.rttSamples.push(r); this.rtt = this.rtt ? this.rtt * 0.8 + r * 0.2 : r; }
+    else if (m.k === 'go') { if (!this.active) this.start(m.D, 0); }
+    else if (m.k === 'sum') { this.rsums.set(m.f, m.s); this.checkSum(m.f); }
+    else if (m.k === 'fixat') { if (this.role === 1) { this.fixF = m.f; this.fixSnap = null; } }
+    else if (m.k === 'fix') { if (this.role === 1 && m.f === this.fixF) this.fixSnap = m.snap; }
+  },
+  start(D, rtt) {
+    this.D = D; if (rtt) this.rtt = rtt;
+    this.active = true; this.menuOpen = false; this.startT = 0;
+    this.simF = 0; this.sendF = D; this.inputs = [new Map(), new Map()]; this.carry = [0, 0]; this.re = [false, false];
+    for (let f = 0; f < D; f++) { this.inputs[0].set(f, 0); this.inputs[1].set(f, 0); }
+    this.sums.clear(); this.rsums.clear(); this.desync = 0; this.fixF = null; this.fixSnap = null; this.outbox = [];
+    this.rng = makeRng(this.seed);
+    $('online').classList.add('hidden'); $('title').classList.add('hidden'); $('netHud').classList.remove('hidden');
+    pressed.clear();
+    // 두 PC의 시작 상태를 완전히 똑같이
+    RNG = this.rng;
+    frame = 0; G.time = 0; hitStop = 0; timeScale = 1; emberAcc = 0; darkK = 0; darkTarget = 0; G.paused = false;
+    for (const f of G.f) { f.anim.mixer.stopAllAction(); f.anim.cur = null; f.anim.curName = ''; f.meter = 0; f.wins = 0; }
+    G.startMatch();
+    RNG = Math.random;
+    acc = 0; this.lastTick = performance.now();
+    announce(this.role === 0 ? '나 : 드래곤 워리어' : '나 : 뮤턴트', 'gold');
+  },
+
+  // ---------------- 록스텝 ----------------
+  sampleLocal() {
+    const k = NET_KEYS, me = G.f[this.role], op = G.f[1 - this.role];
+    const ax = op.pos.x - me.pos.x, az = op.pos.z - me.pos.z;
+    const screenSign = Math.sign(ax * camRight.x + az * camRight.z) || 1;
+    const fIn = ((anyK(held, k.right) ? 1 : 0) - (anyK(held, k.left) ? 1 : 0)) * screenSign;
+    const sideSign = (-az * camFwd.x + ax * camFwd.z) < 0 ? -1 : 1;   // 화면 '위쪽(안쪽)'이 상대 기준 어느 옆인지
+    const sIn = ((anyK(held, k.up) ? 1 : 0) - (anyK(held, k.down) ? 1 : 0)) * sideSign;
+    let b = 0;
+    if (fIn > 0) b |= NB.F; else if (fIn < 0) b |= NB.B;
+    if (sIn > 0) b |= NB.SL; else if (sIn < 0) b |= NB.SR;
+    if (anyK(held, k.guard)) b |= NB.GUARD; if (anyK(held, k.run)) b |= NB.RUN;
+    if (anyK(pressed, k.up)) b |= NB.UPTAP; if (anyK(pressed, k.attack)) b |= NB.ATK; if (anyK(pressed, k.kick)) b |= NB.KICK;
+    if (anyK(pressed, k.s0)) b |= NB.S0; if (anyK(pressed, k.s1)) b |= NB.S1; if (anyK(pressed, k.s2)) b |= NB.S2; if (anyK(pressed, k.ult)) b |= NB.ULT;
+    if (G.phase === 'matchend' && anyK(pressed, ['KeyR', 'Enter', 'NumpadEnter'])) b |= NB.RE;
+    pressed.clear();
+    return b;
+  },
+  tick() {
+    const f = this.simF;
+    for (let i = 0; i < 2; i++) {
+      const b = (this.inputs[i].get(f) | 0) | this.carry[i]; this.inputs[i].delete(f);
+      this.curBits[i] = b; this.cur[i] = netDecode(b);
+    }
+    RNG = this.rng;
+    const r = step();
+    for (let i = 0; i < 2; i++) this.carry[i] = r === false ? (this.curBits[i] & NB_PRESS) : 0;
+    if (G.phase === 'matchend') {
+      for (let i = 0; i < 2; i++) if (this.curBits[i] & NB.RE) this.re[i] = true;
+      $('meHelp').textContent = this.re[0] && this.re[1] ? '재대결 시작!' : this.re[this.role] ? '상대가 재대결을 누르길 기다리는 중... (ESC 나가기)' : this.re[1 - this.role] ? '상대가 재대결을 원해요! R 키를 누르세요 (ESC 나가기)' : 'R 재대결 (둘 다 눌러야 시작) · ESC 나가기';
+      if (this.re[0] && this.re[1]) { this.re = [false, false]; for (const ft of G.f) ft.meter = 0; G.startMatch(); }
+    }
+    RNG = Math.random;
+    this.simF++;
+    if (f % 30 === 0) { const h = simHash(); this.sums.set(f, h); this.sendR({ k: 'sum', f, s: h }); this.checkSum(f); }
+    if (this.fixF !== null && f === this.fixF) this.applyFix();
+  },
+  checkSum(f) {
+    if (!this.sums.has(f) || !this.rsums.has(f)) return;
+    const ok = this.sums.get(f) === this.rsums.get(f);
+    this.sums.delete(f); this.rsums.delete(f);
+    if (ok) return;
+    this.desync++; console.warn('[격투왕 온라인] 동기화 어긋남 감지 : 프레임', f);
+    if (this.role === 0 && this.fixF === null) { this.fixF = this.simF + 45; this.sendR({ k: 'fixat', f: this.fixF }); }
+  },
+  snapshot() {
+    return { rt: G.roundTime, round: G.round, f: G.f.map(ft => ({ p: ft.pos.toArray(), v: ft.vel.toArray(), y: ft.yaw, hp: ft.hp, sh: ft.shownHp, m: ft.meter, cd: ft.cds.slice(), w: ft.wins, c: ft.combo, ct: ft.comboTimer, iv: ft.invuln })) };
+  },
+  applyFix() {   // 방장 기준으로 핵심 값을 맞추고 난수도 같이 다시 맞춤
+    if (this.role === 0) this.sendR({ k: 'fix', f: this.fixF, snap: this.snapshot() });
+    else if (this.fixSnap) {
+      const s = this.fixSnap; G.roundTime = s.rt; G.round = s.round;
+      s.f.forEach((d, i) => { const ft = G.f[i]; ft.pos.fromArray(d.p); ft.vel.fromArray(d.v); ft.yaw = d.y; ft.hp = d.hp; ft.shownHp = d.sh; ft.meter = d.m; ft.cds = d.cd; ft.wins = d.w; ft.combo = d.c; ft.comboTimer = d.ct; ft.invuln = d.iv; });
+    }
+    this.rng = makeRng((this.seed ^ Math.imul(this.fixF + 1, 2654435761)) >>> 0);
+    this.fixF = null; this.fixSnap = null;
+  },
+  pump() {
+    let n = 0;
+    while (acc >= DT && n < 8) {
+      while (this.sendF < this.simF + this.D) {   // 내 입력은 D 프레임 앞서 보냄
+        const b = this.sampleLocal(); this.inputs[this.role].set(this.sendF, b); this.outbox.push(b); this.outF ??= this.sendF; this.sendF++;
+      }
+      if (!this.inputs[1 - this.role].has(this.simF)) break;   // 상대 입력이 아직 안 옴 → 대기
+      if (this.role === 1 && this.fixF !== null && this.simF === this.fixF && !this.fixSnap) break;   // 보정 데이터 대기
+      this.tick(); acc -= DT; n++;
+    }
+    if (this.outbox.length) { this.sendR({ k: 'in', f: this.outF, b: this.outbox }); this.outbox = []; this.outF = undefined; }
+    if (n) this.lastTick = performance.now();
+    return n > 0;
+  },
+
+  // ---------------- 종료 ----------------
+  leave() { this.sendR({ k: 'bye' }); this.send({ t: 'leave' }); this.active = false; this.startT = 0; RNG = Math.random; $('netHud').classList.add('hidden'); },
+  endOnline(msg) {
+    const wasActive = this.active;
+    this.active = false; this.startT = 0; RNG = Math.random; $('netHud').classList.add('hidden');
+    if (wasActive) {
+      announce(msg, 'red');
+      setTimeout(() => { if (this.active) return; G.goTitle(); clearAnnounce(); this.openMenu(); this.status(msg, 'bad'); }, 2200);
+    } else if (this.menuOpen) { this.show('netMenu'); this.status(msg, 'bad'); }
+  },
+  hud(now) {
+    if (!this.active) return;
+    const stall = now - this.lastTick;
+    const txt = `ONLINE · 나 ${this.role === 0 ? 'P1 드래곤' : 'P2 뮤턴트'} · 핑 ${Math.round(this.rtt)}ms · 입력지연 ${this.D}F` + (this.desync ? ` · 보정 ${this.desync}` : '') + (stall > 600 ? ' · 상대 기다리는 중...' : '');
+    if (txt !== this.lastHud) { $('netHud').textContent = txt; this.lastHud = txt; $('netHud').classList.toggle('warn', stall > 600); }
+    if (now - (this.lastPing || 0) > 2000) { this.lastPing = now; this.sendR({ k: 'ping', id: ++this.pingId, at: now }); }
+  },
+};
+for (const [id, fn] of [['netQuick', () => NET.quick()], ['netCreate', () => NET.create()], ['netJoin', () => NET.join($('netCode').value)], ['netCancel', () => NET.cancel()],
+  ['netConnect', () => NET.connect($('netServer').value)], ['netBack', () => NET.closeMenu()], ['titleOnline', () => { if (G.phase === 'title') NET.openMenu(); }]]) {
+  const el = $(id); if (el) el.addEventListener('click', fn);
+}
+
 function applyQuality(q) {   // 프레임이 계속 낮으면 단계적으로 품질을 낮춤
   if (q >= 1) PR = Math.min(PR, 1.0);
   if (q >= 2) { PR = 0.85; keyLight.castShadow = false; for (const rt of [composer.renderTarget1, composer.renderTarget2]) { rt.samples = 0; rt.dispose(); } }
@@ -1804,7 +2071,9 @@ function loop(now) {
   acc += ft / 1000; last = now;
   if (acc > 0.1) acc = 0.1;   // 느린 PC에서 한 번에 너무 많이 몰아서 계산하지 않게
   let stepped = false;
-  while (acc >= DT) { if (step() !== false) pressed.clear(); acc -= DT; stepped = true; }
+  if (NET.active) stepped = NET.pump();
+  else while (acc >= DT) { if (step() !== false) pressed.clear(); acc -= DT; stepped = true; }
+  NET.hud(now);
   if (stepped) { updateCamera(DT, camMode()); updateHud(); render(); }
   requestAnimationFrame(loop);
 }

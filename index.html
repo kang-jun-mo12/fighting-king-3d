@@ -70,13 +70,36 @@
     </div>
   </div>
   <div class="hint">앞으로 달리면서 펀치 = 돌진 스트레이트 · 앞으로 달리면서 킥 = 뒤돌려차기 · 궁극기 게이지는 때리거나 맞으면 차요</div>
-  <div class="press">ENTER 키를 눌러 시작</div>
+  <div class="press">ENTER 로컬 대전 (한 키보드 2인)</div>
+  <button class="onlineBtn" id="titleOnline">O 온라인 대전</button>
   <div class="credits">맵: "Low Poly Lava Fighting Arena/Stage" by Umar (CC BY) · 캐릭터: "Sci-Fi Character - Dragon Warrior" by Spooky Iluha (CC BY-NC) · Mutant &amp; 애니메이션: Adobe Mixamo · 이펙트·효과음: Kenney (CC0), OpenGameArt rubberduck · artisticdude (CC0)</div>
 </div>
 
 <div id="pause" class="hidden"><div>일시정지</div><small>P 키를 눌러 계속 · ESC 타이틀로</small></div>
 
-<div id="matchend" class="hidden"><div id="meText"></div><div id="meScore"></div><small>R 다시하기 · ESC 타이틀로</small></div>
+<div id="matchend" class="hidden"><div id="meText"></div><div id="meScore"></div><small id="meHelp">R 다시하기 · ESC 타이틀로</small></div>
+
+<!-- 온라인 대전 -->
+<div id="online" class="hidden">
+  <div class="box">
+    <h2>온라인 대전</h2>
+    <div id="netStatus">서버 연결 중...</div>
+    <div id="netServerRow" class="row hidden">
+      <input id="netServer" placeholder="방장 서버 주소 (예: xxxx.trycloudflare.com)" spellcheck="false">
+      <button id="netConnect">연결</button>
+    </div>
+    <div id="netMenu" class="hidden">
+      <div class="row"><button id="netQuick">1 빠른 매칭</button><button id="netCreate">2 방 만들기</button></div>
+      <div class="row"><input id="netCode" maxlength="4" inputmode="numeric" placeholder="방 코드 4자리"><button id="netJoin">코드로 입장</button></div>
+    </div>
+    <div id="netWait" class="hidden"><div id="netWaitText"></div><button id="netCancel">취소</button></div>
+    <p class="small">먼저 기다린 사람이 <b>드래곤 워리어(P1)</b>, 나중에 들어온 사람이 <b>뮤턴트(P2)</b>예요.<br>
+      각자 자기 키보드로 P1 키(A/D·W/S·E·Space·R/F/Q·T·Tab·왼Shift) 또는 P2 키 아무거나 써도 돼요.<br>
+      대전 중에 다른 창으로 바꾸면 게임이 멈춰서 상대도 기다리게 돼요.</p>
+    <button id="netBack" class="ghost">ESC 뒤로</button>
+  </div>
+</div>
+<div id="netHud" class="hidden"></div>
 
 <!-- 로딩 -->
 <div id="loading">
