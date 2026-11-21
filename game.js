@@ -25,7 +25,8 @@ let ARENA_R = 7;
 const ANIM_NAMES = ['idle', 'walk_fwd', 'walk_back', 'strafe_left', 'strafe_right', 'jump', 'jab', 'cross', 'kick',
   'uppercut', 'air_kick', 'fireball', 'spin_kick', 'block', 'hit', 'hit_big', 'stagger', 'knockdown', 'getup',
   'victory', 'roar', 'taunt', 'fly', 'hard_land', 'spell_up', 'slam', 'dive', 'flex', 'falling',
-  'run', 'low_kick', 'mid_kick', 'high_kick', 'spin_back', 'run_back', 'run_left', 'run_right'];
+  'run', 'low_kick', 'mid_kick', 'high_kick', 'spin_back', 'run_back', 'run_left', 'run_right',
+  'sam_a', 'sam_b', 'sam_c', 'sam_dash', 'kn_a', 'kn_b', 'kn_c', 'kn_block', 'of_shoot', 'of_whip', 'of_aim', 'so_a', 'so_b', 'so_c', 'so_cast', 'so_area'];
 const TEX_NAMES = ['flame_02', 'fire_02', 'circle_05', 'magic_05', 'flame_03', 'fire_01', 'smoke_04', 'smoke_07', 'magic_02', 'magic_04', 'twirl_02', 'dirt_02',
   'star_06', 'flare_01', 'light_02', 'scorch_01', 'scorch_03', 'circle_03', 'symbol_01', 'symbol_02', 'muzzle_02'];
 
@@ -719,14 +720,20 @@ const MOVES = {
   kick:     { clip: 'kick',     startup: 0.22, active: 0.09, recover: 0.42, dmg: 12, hitstun: 0.6,  blockstun: 0.26, knock: 6.5, reach: 1.8,  lunge: 2.2, launch: 4.5, knockdown: true, heavy: true },
   air_kick: { clip: 'air_kick', startup: 0.12, active: 0.22, recover: 0.25, dmg: 9,  hitstun: 0.45, blockstun: 0.2,  knock: 4.0, reach: 1.6,  air: true },
 };
+MOVES.dash = { ...MOVES.cross };   // 달리며 펀치 (캐릭터별로 바꿀 수 있게 따로)
 let CI = null;
-function finalizeMoves() {
-  for (const k in MOVES) {
-    const m = MOVES[k], ci = CI[m.clip];
-    m.eff = ci.eff; m.t0 = Math.max(0, ci.peak - 0.42);
-    m.speed1 = clamp((ci.peak - m.t0) / m.startup, 0.8, 4);
-    m.speed2 = clamp((Math.min(ci.dur, ci.peak + 0.6) - ci.peak) / (m.active + m.recover), 0.6, 2.6);
-  }
+function finalizeMove(m) {
+  const ci = CI[m.clip];
+  m.eff = m.effOverride || ci.eff; m.t0 = Math.max(0, ci.peak - 0.42);
+  m.speed1 = clamp((ci.peak - m.t0) / m.startup, 0.8, 4);
+  m.speed2 = clamp((Math.min(ci.dur, ci.peak + 0.6) - ci.peak) / (m.active + m.recover), 0.6, 2.6);
+}
+function finalizeMoves() { for (const k in MOVES) finalizeMove(MOVES[k]); }
+function buildMoveSet(ov) {   // 무기 캐릭터 : 펀치 연타를 칼 · 총 · 마법 동작으로 교체
+  if (!ov) return MOVES;
+  const ms = Object.assign({}, MOVES);
+  for (const k in ov) { const m = Object.assign({}, MOVES[k], ov[k]); finalizeMove(m); ms[k] = m; }
+  return ms;
 }
 
 // =====================================================================
@@ -758,6 +765,7 @@ class Fighter {
     for (const n of ['LeftHand', 'RightHand', 'LeftFoot', 'RightFoot', 'LeftForeArm', 'RightForeArm', 'LeftLeg', 'RightLeg', 'Spine2', 'Head', 'Hips'])
       this.effBones[n] = this.rig.bone(n);
     this.cds = [0, 0, 0];
+    this.moves = buildMoveSet(o.def && o.def.moves);
     this.reset(0);
   }
   get fwd() { return _fwdTmp.set(Math.sin(this.yaw), 0, Math.cos(this.yaw)); }
@@ -847,7 +855,7 @@ class Fighter {
   neutral(inp, opp) {
     this.faceOpp(opp, 14); this.airUsed = false;
     const dash = this.state === 'run' && this.runFwd;
-    if (this.atkBuf > 0) { this.atkBuf = 0; this.startMove(dash ? 'cross' : 'jab'); return; }
+    if (this.atkBuf > 0) { this.atkBuf = 0; this.startMove(dash ? 'dash' : 'jab'); return; }
     if (this.kickBuf > 0) { this.kickBuf = 0; this.startMove(dash ? 'spin_back' : 'low_kick'); return; }
     if (this.trySkill(false)) return;
     if (inp.guard) {
@@ -886,24 +894,43 @@ class Fighter {
   }
 
   startMove(name) {
-    const m = MOVES[name];
+    const m = this.moves[name];
     this.lungeMul = this.state === 'run' && this.runFwd ? 2.3 : 1;
-    this.move = m; this.setState('attack'); this.chainReq = false; this.sped = false; this.whooshed = false;
+    this.move = m; this.setState('attack'); this.chainReq = false; this.sped = false; this.whooshed = false; this.fired = false;
     this.anim.play(m.clip, { loop: false, fade: 0.06, start: m.t0, speed: m.speed1 });
     if (!m.air) this.faceOpp(G.opp(this));
   }
   updateAttack(inp, opp) {
     const m = this.move, f = this.fwdNew();
     if (!this.sped && this.t >= m.startup) { this.anim.speed = m.speed2; this.sped = true; }
-    if (!this.whooshed && this.t >= m.startup * 0.5) { sfx.whoosh(m.kick || m.heavy); this.whooshed = true; }
+    if (!this.whooshed && this.t >= m.startup * 0.5) { if (!m.ranged) sfx.whoosh(m.kick || m.heavy); if (m.slash) sfx.play('swing', 0.6, 0.8); this.whooshed = true; }
     if (!m.air) { const l = this.t < m.startup + 0.03 ? m.lunge * this.lungeMul : 0; this.vel.x = f.x * l; this.vel.z = f.z * l; }
     const trail = m.eff.includes('Foot') ? this.trailFoot : this.trailHand;
     if (this.t > m.startup * 0.35 && this.t < m.startup + m.active + 0.05) {
-      const tip = this.effPos(m.eff), base = this.effPos(m.eff.replace('Hand', 'ForeArm').replace('Foot', 'Leg'));
-      trail.push(tip, base.lerp(tip, 0.45));
+      const tip = this.effPos(m.eff);
+      if (m.slash && this.def && this.def.weapon) {   // 칼 : 손에서 바깥쪽으로 칼날 길이만큼 궤적
+        const hand = tip.clone(), d = hand.clone().sub(this.chest()); d.y *= 0.5; d.normalize();
+        trail.push(tip.addScaledVector(d, this.def.weapon), hand.addScaledVector(d, 0.15));
+      } else if (!m.ranged && !m.magic) { const base = this.effPos(m.eff.replace('Hand', 'ForeArm').replace('Foot', 'Leg')); trail.push(tip, base.lerp(tip, 0.45)); }
     }
-    if (!this.hasHit && this.t >= m.startup - 0.02 && this.t <= m.startup + m.active && inStrike(this, opp, m.reach, 0.62))
+    if (m.ranged || m.magic) {   // 총 · 마법 : 정해진 순간 한 번 발사, 사거리 안 정면이면 맞음
+      if (!this.fired && this.t >= m.startup - 0.02) {
+        this.fired = true;
+        const fw = this.fwdNew(), hand = this.effPos(m.eff.includes('Hand') ? m.eff : 'RightHand'), R = m.ranged || m.magic;
+        const hit = inStrike(this, opp, R, m.ranged ? 0.55 : 0.85) && !opp.hidden;
+        const end = hit ? opp.chest() : hand.clone().addScaledVector(fw, R + 0.4);
+        const col = m.fxColor || COL.white;
+        if (m.ranged) { beam(hand, end, col, 0.05, 0.1); spawnFlash(hand, col, 1.4, 0.06, TEX.muzzle_02); sparks(end, col, 8, 6, 0.2, 0.15); sfx.play('plasma', 0.5, 1.7); }
+        else {
+          for (let i = 0; i < 8; i++) { const k = i / 8; P.magic.spawn(_v1.copy(hand).lerp(end, k), _v2.randomDirection().multiplyScalar(1.2), col, 0.3, 0.5, 0.1, 0.9, 0, 6); }
+          spawnFlash(end, col, 2.4, 0.12, TEX.magic_05); spawnRing(end, col, { size: 1.6, life: 0.2 }); sfx.fire();
+        }
+        if (hit) this.hasHit = applyHit(this, opp, m, end);
+      }
+    } else if (!this.hasHit && this.t >= m.startup - 0.02 && this.t <= m.startup + m.active && inStrike(this, opp, m.reach, 0.62)) {
       this.hasHit = applyHit(this, opp, m, this.effPos(m.eff));
+      if (this.hasHit && m.slash) slashFx(opp.chest(), _v1.copy(this.fwdNew()).applyAxisAngle(UP, Math.PI / 2), m.fxColor || COL.white, 2.4, 0.25, 0.22);
+    }
     if (!this.chainReq && this.atkBuf > 0 && m.next && this.t > 0.03) { this.chainReq = m.next; this.atkBuf = 0; }
     if (!this.chainReq && this.kickBuf > 0 && m.nextK && this.t > 0.03) { this.chainReq = m.nextK; this.kickBuf = 0; }
     if (this.chainReq && this.t >= m.startup + m.active * 0.6 + (this.hasHit ? 0 : 0.1)) { this.startMove(this.chainReq); return; }
@@ -1332,7 +1359,7 @@ const SK_BURROW = {   // 뮤턴트 5 : 지하 습격
 function startUlt(f) {
   const opp = G.opp(f);
   f.setState('ultStart'); f.vel.set(0, 0, 0); f.faceOpp(opp);
-  f.anim.play('cross', { loop: false, fade: 0.05, start: MOVES.cross.t0, speed: MOVES.cross.speed1 * 0.75 });
+  const cm = f.moves.cross; f.anim.play(cm.clip, { loop: false, fade: 0.05, start: cm.t0, speed: cm.speed1 * 0.75 });
   sfx.ult(); screenFlash(0.15); hitStop = 0.25;
   spawnFlash(f.chest(), f.color.clone().multiplyScalar(3), 4, 0.3, TEX.star_06);
   floatText(f.chest().add(new V3(0, 0.9, 0)), '궁극기!', f === G.f[0] ? '#ffb04a' : '#6fe6ff');
@@ -1586,7 +1613,7 @@ function groundBlast(p, color, size = 3, opts = {}) {   // 땅 폭발 공통
   decal(p, TEX.scorch_03, size * 1.2, 3.5, { color: 0x000000, opacity: 0.75 });
   spawnLight(_v1.copy(p).setY(1), new THREE.Color(color).getHex(), 55, 12, 0.35); shake = Math.max(shake, opts.shake ?? 0.4); fovKick = Math.max(fovKick, 4);
 }
-function moveAnim(f, mv, mul = 1) { const m = MOVES[mv]; f.anim.play(m.clip, { loop: false, fade: 0.05, start: m.t0, speed: m.speed1 * mul }); return m; }
+function moveAnim(f, mv, mul = 1) { const m = (f.moves || MOVES)[mv]; f.anim.play(m.clip, { loop: false, fade: 0.05, start: m.t0, speed: m.speed1 * mul }); return m; }
 
 // ---------- 범용 투사체 ----------
 function spawnGen(owner, p, vel, cfg) {
@@ -1712,7 +1739,7 @@ function blinkSkill(o) {   // 사라졌다가 상대 뒤에 나타나 공격
         }
       }
       if (o.strike) {
-        const m = MOVES[o.strike]; f.trailHand.push(f.effPos('RightHand'), f.effPos('RightForeArm').lerp(f.effPos('RightHand'), 0.45));
+        const m = (f.moves || MOVES)[o.strike]; f.trailHand.push(f.effPos('RightHand'), f.effPos('RightForeArm').lerp(f.effPos('RightHand'), 0.45));
         if (!f.hasHit && f.t >= sk.st + m.startup / (o.strikeMul || 1.2) - 0.02 && f.t <= sk.st + 0.4 && inStrike(f, opp, 1.6, 0.9)) {
           f.hasHit = applyHit(f, opp, o.hit, f.effPos(m.eff)); if (f.hasHit) { xSlash(opp.chest(), o.color, 2.4); if (o.onHit) o.onHit(f, opp, sk); }
         }
@@ -1849,7 +1876,7 @@ function mkUlt(o) {
 const SK_SAM_IAI = dashSkill({ name: '섬광 발도', desc: '눈에 안 보이는 속도로 지나가며 벤다', cd: 4, color: COL.violet, windup: 0.3, dur: 0.22, speed: 26, through: true, ghosts: true,
   windClip: 'block', windStart: 0.1, windSpeed: 1.2, clip: 'cross', clipMul: 1.4, sound: () => sfx.play('swing', 0.9, 0.6),
   hit: { dmg: 14, chip: 4, hitstun: 0.6, blockstun: 0.3, knock: 3, launch: 4, knockdown: true, heavy: true, fxColor: COL.violet } });
-const SK_SAM_SHADOW = blinkSkill({ name: '그림자 분신', desc: '그림자로 사라져 상대 뒤에서 나타나 벤다', cd: 5, color: COL.violet, strike: 'high_kick', strikeMul: 1.3,
+const SK_SAM_SHADOW = blinkSkill({ name: '그림자 분신', desc: '그림자로 사라져 상대 뒤에서 나타나 벤다', cd: 5, color: COL.violet, strike: 'uppercut', strikeMul: 1.3,
   hit: { dmg: 12, chip: 3, hitstun: 0.55, blockstun: 0.25, knock: 4, launch: 5, heavy: true, fxColor: COL.violet } });
 const SK_SAM_VORTEX = {   // 흑염 회오리 : 제자리 회전 베기 3연타
   name: '흑염 회오리', desc: '보라 불꽃을 두르고 회전하며 세 번 벤다', cd: 6, air: true,
@@ -1881,7 +1908,7 @@ const ULT_SAMURAI = mkUlt({ name: '흑염 천참', desc: '순간이동하며 천
             const a = i * 2.3 + 0.4, r = 1.2; poof(att.chest(), COL.violet, 8);
             att.pos.copy(def.pos).add(_v1.set(Math.cos(a) * r, 0, Math.sin(a) * r)); att.pos.y = def.pos.y;
             att.yaw = Math.atan2(def.pos.x - att.pos.x, def.pos.z - att.pos.z); spawnGhost(att);
-            moveAnim(att, i % 2 ? 'cross' : 'high_kick', 1.4);
+            moveAnim(att, i % 2 ? 'cross' : 'jab', 1.4);
           }
           if (t > ht && cineOnce(c, 'th' + i)) { cineHit(c, 4, { color: COL.violet }); slashFx(def.chest(), _v2.set(vrand(-1, 1), vrand(-0.6, 0.6), vrand(-1, 1)).normalize(), COL.violet, 3.4, 0.3, 0.3); }
         }
@@ -1915,9 +1942,9 @@ const SK_KN_SMITE = slamSkill({ name: '성광 강타', desc: '검을 내리찍�
   fx: (p) => { firePillar(p, 1.0, 5, 0.8, vec3c(COL.holy)); sfx.play('glass', 0.5, 1.4); } });
 const SK_KN_COUNTER = {   // 철벽 반격 : 자세를 잡고 있다가 맞으면 반격
   name: '철벽 반격', desc: '방어 자세 중에 맞으면 피해 없이 바로 반격', cd: 6, air: false, counter: true,
-  start(f, opp, sk) { f.vel.set(0, 0, 0); f.anim.play('block', { loop: false, fade: 0.06, start: Math.max(0, CI.block.hold - 0.2), speed: 1.4 }); sk.ready = true; spawnRing(f.chest(), COL.gold, { size: 2.6, life: 0.3 }); sfx.play('metal', 0.6, 0.8); },
+  start(f, opp, sk) { f.vel.set(0, 0, 0); f.anim.play('kn_block', { loop: false, fade: 0.06, start: Math.max(0, CI.kn_block.hold - 0.2), speed: 1.4 }); sk.ready = true; spawnRing(f.chest(), COL.gold, { size: 2.6, life: 0.3 }); sfx.play('metal', 0.6, 0.8); },
   update(f, opp, sk) {
-    if (f.anim.time >= CI.block.hold) f.anim.speed = 0;
+    if (f.anim.time >= CI.kn_block.hold) f.anim.speed = 0;
     if (sk.ready && frame % 3 === 0) { _v1.randomDirection().multiplyScalar(1.1); P.magic.spawn(_v2.copy(f.chest()).add(_v1), _v1.multiplyScalar(-1), COL.gold, 0.3, 0.4, 0.05, 1, 0, 3); }
     if (sk.countered) {
       if (once(sk, 'strike')) { f.faceOpp(opp); moveAnim(f, 'uppercut', 1.4); sk.ct = f.t; floatText(f.chest().add(_v1.set(0, 0.8, 0)), 'COUNTER!', '#ffd34a'); sfx.play('metal', 0.9, 1.2); hitStop = 0.12; }
@@ -2056,16 +2083,16 @@ const ULT_MECHA = mkUlt({ name: '오버드라이브', desc: '분사 연타 후 �
 // =====================================================================
 //  5) 용족 마법사
 // =====================================================================
-const SK_SO_ORB = shootSkill({ name: '비전 구체', desc: '상대를 따라가는 마력 구체', cd: 3, air: true, color: COL.magenta, castT: 0.3, count: 1, speed: 9,
+const SK_SO_ORB = shootSkill({ name: '비전 구체', desc: '상대를 따라가는 마력 구체', cd: 3, air: true, color: COL.magenta, clip: 'so_b', castT: 0.3, count: 1, speed: 9, from: 'RightHand',
   cfg: { look: 'rune', color: COL.magenta, size: 0.32, life: 2.6, homing: 2.2, homeDelay: 0.15, trail: 'magic', trailN: 2, light: 0xff40d0,
     hit: { dmg: 12, chip: 3, hitstun: 0.5, blockstun: 0.25, knock: 4.5, heavy: true, fxColor: COL.magenta } } });
 const SK_SO_BLINK = blinkSkill({ name: '공간 도약', desc: '상대 등 뒤로 순간이동해 마력 폭발', cd: 5, color: COL.magenta, appear: 0.3, recover: 0.45, preClip: 'spell_up',
   burst: { r: 1.9, hit: { dmg: 11, chip: 3, hitstun: 0.6, blockstun: 0.25, knock: 5, launch: 5, knockdown: true, heavy: true, fxColor: COL.magenta }, fx: (p) => firePillar(p, 1.0, 4, 0.6, vec3c(COL.magenta)) } });
-const SK_SO_RUNE = runeSkill({ name: '마법진 폭발', desc: '상대 발밑에 마법진, 잠시 뒤 마력 기둥', cd: 6, color: COL.magenta, r: 1.7, delay: 0.75, pillarH: 8,
+const SK_SO_RUNE = runeSkill({ name: '마법진 폭발', desc: '상대 발밑에 마법진, 잠시 뒤 마력 기둥', cd: 6, color: COL.magenta, r: 1.7, delay: 0.75, pillarH: 8, clip: 'so_cast', clipStart: 0.1, clipSpeed: 1.5,
   hit: { dmg: 16, chip: 4, hitstun: 0.8, blockstun: 0.3, knock: 2, launch: 9, knockdown: true, heavy: true, fxColor: COL.magenta } });
-const ULT_SORCERESS = mkUlt({ name: '용의 강림', desc: '구체 난사 후 거대 마법진에서 용의 불꽃이 쏟아진다', dmg: 40, dur: 6.4, color: COL.magenta, introClip: 'spell_up', introStart: 0.1, introSpeed: 0.9,
+const ULT_SORCERESS = mkUlt({ name: '용의 강림', desc: '구체 난사 후 거대 마법진에서 용의 불꽃이 쏟아진다', dmg: 40, dur: 6.4, color: COL.magenta, introClip: 'so_area', introStart: 0.1, introSpeed: 1.0,
   segs: [
-    { to: 2.3, enter(c) { c.att.anim.play('fireball', { loop: true, fade: 0.1, start: 0.2, speed: 1.6 }); },
+    { to: 2.3, enter(c) { c.att.anim.play('so_a', { loop: true, fade: 0.1, start: 0.1, speed: 1.7 }); },
       tick(c, k, t) {
         at(c, -0.5, 0, 0, c.att.pos); at(c, 1.8, 0, 0, c.def.pos);
         for (let i = 0; i < 6; i++) if (t > 1.1 + i * 0.18 && cineOnce(c, 'o' + i)) {
@@ -2074,7 +2101,7 @@ const ULT_SORCERESS = mkUlt({ name: '용의 강림', desc: '구체 난사 후 �
         }
       },
       cam: (c, k) => camOrbit(c, k, { r: 3.4, h: 1.5, a0: 0.2, a1: 1.0, lf: 0.6, lu: 1.3, fov: 44 }) },
-    { to: 3.6, enter(c) { c.att.anim.play('spell_up', { loop: false, fade: 0.1, start: 0.2, speed: 0.9 }); c.def.anim.play('falling', { loop: true, fade: 0.1 }); c.mc = magicCircle(at(c, 1.8, 0.05, 0), 0xff40c0); darkTarget = 1; sfx.ult(); },
+    { to: 3.6, enter(c) { c.att.anim.play('so_cast', { loop: false, fade: 0.1, start: 0.1, speed: 0.9 }); c.def.anim.play('falling', { loop: true, fade: 0.1 }); c.mc = magicCircle(at(c, 1.8, 0.05, 0), 0xff40c0); darkTarget = 1; sfx.ult(); },
       tick(c, k) { at(c, -0.5, smooth(k) * 1.5, 0, c.att.pos); at(c, 1.8, smooth(k) * 3, 0, c.def.pos); c.att.noGrav = true; chargeFx(c.def, COL.magenta); },
       cam: (c, k) => camFrom(c, k, [-2.5, 0.6, 3.5], [-2.0, 1.0, 5.0], [1.0, 1.8], [1.2, 2.8], 50) },
     { to: 5.0, enter(c) { c.mc2 = magicCircle(at(c, 1.8, 9, 0), 0xff60e0); },
@@ -2480,15 +2507,19 @@ const CHARS = defineChars([
   { id: 'mutant', name: '뮤턴트', tag: '땅을 부수는 괴력의 돌연변이', src: 'assets/characters/mutant/mutant.fbx', rig: 'mixamo', height: 2.15, color: [0.18, 0.84, 1],
     victory: 'roar', voice: 'beast', ghosts: true, skills: () => [SK_SPIN, SK_QUAKE, SK_BURROW], ult: () => ULT_MUTANT },
   { id: 'samurai', name: '흑염 사무라이', tag: '보라 불꽃의 그림자 검객', src: 'assets/characters/samurai/samurai.glb', rig: 'map', height: 1.95, color: [0.72, 0.4, 1],
-    victory: 'taunt', voice: 'mech', ghosts: true, skills: () => [SK_SAM_IAI, SK_SAM_SHADOW, SK_SAM_VORTEX], ult: () => ULT_SAMURAI },
+    victory: 'taunt', voice: 'mech', ghosts: true, weapon: 1.0, moves: { jab: { clip: 'sam_a', dmg: 7, reach: 1.8, startup: 0.14, active: 0.09, slash: true, fxColor: COL.violet }, cross: { clip: 'sam_b', dmg: 8, reach: 1.85, startup: 0.16, slash: true, fxColor: COL.violet }, uppercut: { clip: 'sam_c', dmg: 11, reach: 1.9, startup: 0.2, active: 0.1, recover: 0.32, launch: 6.2, heavy: true, slash: true, fxColor: COL.violet }, dash: { clip: 'sam_dash', dmg: 10, reach: 1.9, startup: 0.16, lunge: 3.2, knock: 5, heavy: true, slash: true, fxColor: COL.violet } },
+    skills: () => [SK_SAM_IAI, SK_SAM_SHADOW, SK_SAM_VORTEX], ult: () => ULT_SAMURAI },
   { id: 'knight', name: '중갑 기사', tag: '방패와 성검의 수호자', src: 'assets/characters/knight/knight.glb', rig: 'map', height: 2.0, color: [1, 0.8, 0.3],
-    victory: 'flex', voice: 'mech', skills: () => [SK_KN_BASH, SK_KN_SMITE, SK_KN_COUNTER], ult: () => ULT_KNIGHT },
+    victory: 'flex', voice: 'mech', weapon: 0.9, moves: { jab: { clip: 'kn_a', dmg: 7, reach: 1.7, startup: 0.14, slash: true, fxColor: COL.gold }, cross: { clip: 'kn_b', dmg: 8, reach: 1.75, startup: 0.16, slash: true, fxColor: COL.gold }, uppercut: { clip: 'kn_c', dmg: 12, reach: 1.8, startup: 0.22, active: 0.1, recover: 0.34, launch: 5.5, heavy: true, slash: true, fxColor: COL.holy }, dash: { clip: 'kn_c', dmg: 11, reach: 1.85, startup: 0.18, lunge: 3, knock: 5, heavy: true, slash: true, fxColor: COL.gold } },
+    skills: () => [SK_KN_BASH, SK_KN_SMITE, SK_KN_COUNTER], ult: () => ULT_KNIGHT },
   { id: 'officer', name: 'SF 장교', tag: '플라즈마 총의 전술 장교', src: 'assets/characters/officer/officer.glb', rig: 'map', pose: 'clip:T-Pose', height: 1.9, color: [0.3, 1, 0.9],
-    victory: 'taunt', voice: 'mech', skills: () => [SK_OF_BURST, SK_OF_GRENADE, SK_OF_BATON], ult: () => ULT_OFFICER },
+    victory: 'taunt', voice: 'mech', moves: { jab: { clip: 'of_whip', dmg: 6, reach: 1.3, startup: 0.12 }, cross: { clip: 'of_shoot', dmg: 6, ranged: 4.5, startup: 0.16, lunge: 0.6, knock: 2, fxColor: COL.teal }, uppercut: { clip: 'of_shoot', dmg: 8, ranged: 5, startup: 0.14, lunge: 0.4, knock: 4.5, heavy: true, fxColor: COL.teal }, dash: { clip: 'of_shoot', dmg: 7, ranged: 5, startup: 0.14, lunge: 1, knock: 3, fxColor: COL.teal } },
+    skills: () => [SK_OF_BURST, SK_OF_GRENADE, SK_OF_BATON], ult: () => ULT_OFFICER },
   { id: 'mecha', name: '메카 전사', tag: '미사일과 부스터의 강철 거인', src: 'assets/characters/mecha/mecha.glb', rig: 'map', height: 2.3, color: [1, 0.6, 0.2],
     victory: 'flex', voice: 'mech', skills: () => [SK_ME_ROCKET, SK_ME_MISSILES, SK_ME_KNEE], ult: () => ULT_MECHA },
   { id: 'sorceress', name: '용족 마법사', tag: '마법진을 다루는 용의 후예', src: 'assets/characters/sorceress/sorceress.glb', rig: 'map', pose: 'bind', height: 2.0, color: [1, 0.35, 0.85],
-    victory: 'taunt', voice: 'mech', skills: () => [SK_SO_ORB, SK_SO_BLINK, SK_SO_RUNE], ult: () => ULT_SORCERESS },
+    victory: 'taunt', voice: 'mech', moves: { jab: { clip: 'so_a', dmg: 6, magic: 2.3, startup: 0.16, lunge: 1, fxColor: COL.magenta }, cross: { clip: 'so_b', dmg: 7, magic: 2.5, startup: 0.17, lunge: 1, fxColor: COL.magenta }, uppercut: { clip: 'so_c', dmg: 10, magic: 2.6, startup: 0.22, active: 0.1, recover: 0.32, launch: 6, heavy: true, fxColor: COL.magenta }, dash: { clip: 'so_a', dmg: 8, magic: 2.4, startup: 0.15, lunge: 2, knock: 4, fxColor: COL.magenta } },
+    skills: () => [SK_SO_ORB, SK_SO_BLINK, SK_SO_RUNE], ult: () => ULT_SORCERESS },
   { id: 'alien', name: '외계인', tag: '염동력과 산성의 침략자', src: 'assets/characters/alien/alien.glb', rig: 'map', height: 1.85, color: [0.4, 1, 0.5],
     victory: 'taunt', voice: 'beast', skills: () => [SK_AL_ACID, SK_AL_TK, SK_AL_WELL], ult: () => ULT_ALIEN },
   { id: 'juggernaut', name: '저거넛', tag: '모든 것을 부수는 거대 괴수', src: 'assets/characters/juggernaut/juggernaut.glb', rig: 'map', height: 2.5, color: [1, 0.3, 0.2],
@@ -2878,7 +2909,7 @@ function simHash() {
   let h = 2166136261; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
   return h >>> 0;
 }
-const GAME_VER = '2026.11.22-10chars';   // 온라인 : 두 사람의 게임 버전이 같아야 대전 가능
+const GAME_VER = '2026.11.22-weapons';   // 온라인 : 두 사람의 게임 버전이 같아야 대전 가능
 const NET_POINTER = 'https://api.github.com/repos/kang-jun-mo12/fighting-king-3d/contents/server.json?ref=server';   // 고정 링크용 서버 주소 파일
 const NET = {
   ws: null, url: '', connected: false, menuOpen: false, active: false, role: 0, seed: 0, D: 4,
