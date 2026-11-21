@@ -5,7 +5,7 @@
 <meta http-equiv="Cache-Control" content="no-cache">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>격투왕 3D</title>
-<link rel="stylesheet" href="style.css?v=3df9bc0362">
+<link rel="stylesheet" href="style.css?v=6bf601dd42">
 </head>
 <body>
 <canvas id="c"></canvas>
@@ -44,35 +44,36 @@
 <!-- 타이틀 -->
 <div id="title" class="hidden">
   <div class="logo">격투왕 <em>3D</em></div>
-  <div class="sub">LAVA ARENA</div>
+  <div class="sub">LAVA ARENA · 10 FIGHTERS</div>
   <div class="cards">
     <div class="card p1">
-      <h3>P1 · 드래곤 워리어</h3>
-      <p>이동 A/D · <b class="k">왼Shift</b>+아무 방향 = 달리기 (앞·뒤·옆) · 옆이동 W/S · W 두 번 = 점프</p>
-      <p>Tab 막기 · <b class="k">E</b> 펀치 · <b class="k">Space</b> 킥 (펀치·킥을 섞어 연타하면 콤보)</p>
-      <ul>
-        <li><b>R</b> 플라즈마 기공파 — 에너지탄 (공중이면 아래로 사선)</li>
-        <li><b>F</b> 드래곤 브레스 — 화염 방사, 고개를 돌려 쓸어버림</li>
-        <li><b>Q</b> 천공 강하 — 날아올라 상대에게 불꽃 다이브</li>
-        <li><b>T</b> 궁극기 · 메테오 스톰 — 하늘에서 운석 폭격</li>
-      </ul>
+      <h3>1P 조작</h3>
+      <p>이동 A/D · 옆이동 W/S · W 두 번 = 점프 · <b class="k">왼Shift</b>+방향 = 달리기</p>
+      <p>Tab 막기 · <b class="k">E</b> 펀치 · <b class="k">Space</b> 킥 · <b class="k">R F Q</b> 스킬 · <b class="k">T</b> 궁극기</p>
     </div>
     <div class="card p2">
-      <h3>P2 · 뮤턴트</h3>
-      <p>이동 ←/→ · <b class="k">0</b>+아무 방향 = 달리기 (앞·뒤·옆) · 옆이동 ↑/↓ · ↑ 두 번 = 점프</p>
-      <p>7 막기 · <b class="k">8</b> 펀치 · <b class="k">1</b> 킥 (숫자패드 가능, 섞어 연타하면 콤보)</p>
-      <ul>
-        <li><b>9</b> 광폭 회오리킥 — 막기를 부수며 추적 돌진</li>
-        <li><b>4</b> 대지 균열 — 땅을 내리쳐 바위 가시를 일직선으로</li>
-        <li><b>5</b> 지하 습격 — 땅속으로 파고들어 발밑에서 분출</li>
-        <li><b>6</b> 궁극기 · 지옥의 포효 — 주변 전체에 가시와 용암 폭발</li>
-      </ul>
+      <h3>2P 조작</h3>
+      <p>이동 ←/→ · 옆이동 ↑/↓ · ↑ 두 번 = 점프 · <b class="k">0</b>+방향 = 달리기</p>
+      <p>7 막기 · <b class="k">8</b> 펀치 · <b class="k">1</b> 킥 · <b class="k">9 4 5</b> 스킬 · <b class="k">6</b> 궁극기 (숫자패드 가능)</p>
     </div>
   </div>
   <div class="hint">앞으로 달리면서 펀치 = 돌진 스트레이트 · 앞으로 달리면서 킥 = 뒤돌려차기 · 궁극기 게이지는 때리거나 맞으면 차요</div>
-  <div class="press">ENTER 로컬 대전 (한 키보드 2인)</div>
+  <div class="press">ENTER 캐릭터 선택 · 로컬 대전 (한 키보드 2인)</div>
   <button class="onlineBtn" id="titleOnline">O 온라인 대전</button>
-  <div class="credits">맵: "Low Poly Lava Fighting Arena/Stage" by Umar (CC BY) · 캐릭터: "Sci-Fi Character - Dragon Warrior" by Spooky Iluha (CC BY-NC) · Mutant &amp; 애니메이션: Adobe Mixamo · 이펙트·효과음: Kenney (CC0), OpenGameArt rubberduck · artisticdude (CC0)</div>
+  <div class="credits">맵: "Low Poly Lava Fighting Arena/Stage" by Umar (CC BY) · 캐릭터: "Sci-Fi Character - Dragon Warrior" by Spooky Iluha (CC BY-NC) · "Shadowflame Samurai" by dark_igorek (CC BY) · "Medieval Knight - rigged for UE4/5" by Andy Woodhead (CC BY) · "Stylized Sci-Fi Officer with Gun" by Jungle Jim (CC BY) · "BOT MECHA Warrior" by OSCAR CREATIVO (CC BY-NC) · "Draconic Sorceress Character Rig" · "Insectoid Monster Rig" by DM-913 (CC BY) · "Alien" by Michael V (Sketchfab Free Standard) · "monster juggernaut" by sanyaork (CC BY) · Mutant &amp; 애니메이션: Adobe Mixamo · 이펙트·효과음: Kenney (CC0), OpenGameArt rubberduck · artisticdude (CC0)</div>
+</div>
+
+
+<!-- 캐릭터 선택 -->
+<div id="select" class="hidden">
+  <div class="selTitle">캐릭터 선택</div>
+  <div class="selRow">
+    <div class="selInfo p1" id="sel1"></div>
+    <div class="selGrid" id="selGrid"></div>
+    <div class="selInfo p2" id="sel2"></div>
+  </div>
+  <div class="selStatus" id="selStatus"></div>
+  <div class="selHelp" id="selHelp"></div>
 </div>
 
 <div id="pause" class="hidden"><div>일시정지</div><small>P 키를 눌러 계속 · ESC 타이틀로</small></div>
@@ -115,6 +116,6 @@
   "three/addons/": "./lib/three/examples/jsm/"
 } }
 </script>
-<script type="module" src="game.js?v=0d6bc085a9"></script>
+<script type="module" src="game.js?v=2a743bc1f9"></script>
 </body>
 </html>

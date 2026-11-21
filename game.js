@@ -501,12 +501,17 @@ function cleanDragon(root) {   // Rigify 리그에서 변형 뼈를 깔끔한 �
   root.updateMatrixWorld(true);
   return byBase;
 }
-const RT_MAP = [['Hips', 'DEF-spine'], ['Spine', 'DEF-spine001'], ['Spine1', 'DEF-spine002'], ['Spine2', 'DEF-spine003'], ['Neck', 'DEF-spine004'], ['Head', 'DEF-spine006']];
-for (const [S, s] of [['Left', 'L'], ['Right', 'R']]) {
-  RT_MAP.push([S + 'Shoulder', 'DEF-shoulder' + s, S + 'Arm', 'DEF-upper_arm' + s], [S + 'Arm', 'DEF-upper_arm' + s, S + 'ForeArm', 'DEF-forearm' + s],
-    [S + 'ForeArm', 'DEF-forearm' + s, S + 'Hand', 'DEF-hand' + s], [S + 'Hand', 'DEF-hand' + s],
-    [S + 'UpLeg', 'DEF-thigh' + s, S + 'Leg', 'DEF-shin' + s], [S + 'Leg', 'DEF-shin' + s, S + 'Foot', 'DEF-foot' + s], [S + 'Foot', 'DEF-foot' + s]);
-}
+// 리타겟 : Mixamo 뼈 이름 → 대상 캐릭터의 뼈 를 받아서 어떤 뼈대에도 같은 애니메이션을 옮김
+//  [뼈, 방향을 맞출 자식뼈] — 팔다리는 뼈 방향까지 맞춰서 T포즈 / A포즈 차이를 흡수
+const RT_PAIRS = [['Hips'], ['Spine'], ['Spine1'], ['Spine2'], ['Neck'], ['Head']];
+for (const S of ['Left', 'Right'])
+  RT_PAIRS.push([S + 'Shoulder', S + 'Arm'], [S + 'Arm', S + 'ForeArm'], [S + 'ForeArm', S + 'Hand'], [S + 'Hand'], [S + 'UpLeg', S + 'Leg'], [S + 'Leg', S + 'Foot'], [S + 'Foot']);
+const DRAGON_MAP = { Hips: 'DEF-spine', Spine: 'DEF-spine001', Spine1: 'DEF-spine002', Spine2: 'DEF-spine003', Neck: 'DEF-spine004', Head: 'DEF-spine006' };
+for (const [S, s] of [['Left', 'L'], ['Right', 'R']])
+  Object.assign(DRAGON_MAP, { [S + 'Shoulder']: 'DEF-shoulder' + s, [S + 'Arm']: 'DEF-upper_arm' + s, [S + 'ForeArm']: 'DEF-forearm' + s, [S + 'Hand']: 'DEF-hand' + s,
+    [S + 'UpLeg']: 'DEF-thigh' + s, [S + 'Leg']: 'DEF-shin' + s, [S + 'Foot']: 'DEF-foot' + s });
+const BONE_FALLBACK = { Spine2: ['Spine2', 'Spine1', 'Spine', 'Hips'], Head: ['Head', 'Neck', 'Spine2', 'Spine1'], Hips: ['Hips'] };
+const _m1 = new THREE.Matrix4(), _m2 = new THREE.Matrix4();
 const wpos = o => new V3().setFromMatrixPosition(o.matrixWorld);
 const wquat = o => { const q = new Q(); o.matrixWorld.decompose(_v1, q, _s1); return q; };
 
@@ -516,37 +521,42 @@ class DirectRig {
   update(dt) { this.mixer.update(dt); }
 }
 class RetargetRig {
-  constructor(dstRoot, byBase, srcTemplate) {
-    this.dst = dstRoot; this.byBase = byBase;
+  constructor(dstRoot, map, srcTemplate, opt = {}) {
+    this.dst = dstRoot; this.map = map;
     this.src = SkeletonUtils.clone(srcTemplate);
     const meshes = []; this.src.traverse(o => { if (o.isMesh) meshes.push(o); }); meshes.forEach(m => m.parent.remove(m));
     this.src.updateMatrixWorld(true); dstRoot.updateMatrixWorld(true);
     const sb = n => this.src.getObjectByName('mixamorig' + n);
-    this.pairs = RT_MAP.map(([s, d, sc, dc]) => {
-      const S = sb(s), D = byBase[d];
+    this.pairs = RT_PAIRS.filter(([s]) => map[s]).map(([s, sc]) => {
+      const S = sb(s), D = map[s];
       const qT0 = wquat(D); let rest = qT0.clone();
-      if (sc) { const dS = wpos(sb(sc)).sub(wpos(S)).normalize(), dT = wpos(byBase[dc]).sub(wpos(D)).normalize(); rest = new Q().setFromUnitVectors(dT, dS).multiply(qT0); }
-      return { S, D, qS0inv: wquat(S).invert(), rest, out: new Q() };
+      if (sc && map[sc]) {
+        const dS = wpos(sb(sc)).sub(wpos(S)), dT = wpos(map[sc]).sub(wpos(D));
+        if (dS.lengthSq() > 1e-10 && dT.lengthSq() > 1e-10) rest = new Q().setFromUnitVectors(dT.normalize(), dS.normalize()).multiply(qT0);
+      }
+      return { name: s, S, D, qS0inv: wquat(S).invert(), rest, out: new Q() };
     });
     const mapped = new Map(this.pairs.map(p => [p.D, p]));
-    this.hips = this.pairs[0].D; this.hipsParent = this.hips.parent; this.hipsParentQ = wquat(this.hipsParent);
+    this.hips = map.Hips; this.hipsParent = this.hips.parent; this.hipsParentQ = wquat(this.hipsParent);
     for (const p of this.pairs) {
       const chain = []; let o = p.D.parent;
-      while (o !== this.hipsParent && !mapped.has(o)) { chain.push(o); o = o.parent; }
-      p.anchor = o === this.hipsParent ? null : mapped.get(o); p.chain = chain.reverse();
+      while (o && o !== this.hipsParent && !mapped.has(o)) { chain.push(o); o = o.parent; }
+      p.anchor = (!o || o === this.hipsParent) ? null : mapped.get(o); p.chain = chain.reverse();
     }
     this.srcHips0 = wpos(sb('Hips')); this.dstHips0 = wpos(this.hips);
-    this.ratio = this.dstHips0.y / this.srcHips0.y;
+    this.ratio = (this.dstHips0.y - (opt.floorY || 0)) / this.srcHips0.y;
     this.hipsParentInv = this.hipsParent.matrixWorld.clone().invert();
     this.mixer = new THREE.AnimationMixer(this.src);
-    this.chestPair = this.pairs.find(p => p.D === byBase['DEF-spine003']);
-    this.wings = ['L', 'R'].map(s => byBase['WingShoulder' + s]).filter(Boolean).map((b, i) => ({ b, rest: b.quaternion.clone(), sign: i === 0 ? 1 : -1 }));
+    this.chestPair = this.pairs.find(p => p.name === 'Spine2') || this.pairs.find(p => p.name === 'Spine1');
+    this.wings = (opt.wings || []).map((b, i) => ({ b, rest: b.quaternion.clone(), sign: i === 0 ? 1 : -1 }));
     this.wingAngle = 0; this.wingSpread = 0;
+    // IK 보조뼈에 달린 손발 : 매 프레임 팔다리 끝을 따라가게 (rot=true 면 회전까지)
+    this.follow = (opt.follow || []).map(([ik, target, rot]) => ({ ik, target, rot,
+      rel: target.matrixWorld.clone().invert().multiply(ik.matrixWorld), dPos: wpos(ik).sub(wpos(target)) }));
   }
   bone(n) {
-    const map = { LeftHand: 'DEF-handL', RightHand: 'DEF-handR', LeftFoot: 'DEF-footL', RightFoot: 'DEF-footR', LeftForeArm: 'DEF-forearmL',
-      RightForeArm: 'DEF-forearmR', LeftLeg: 'DEF-shinL', RightLeg: 'DEF-shinR', Spine2: 'DEF-spine003', Head: 'DEF-spine006', Hips: 'DEF-spine' };
-    return this.byBase[map[n]];
+    for (const k of BONE_FALLBACK[n] || [n]) if (this.map[k]) return this.map[k];
+    return this.map.Hips;
   }
   update(dt) {
     this.mixer.update(dt); this.src.updateMatrixWorld(true);
@@ -559,6 +569,16 @@ class RetargetRig {
     }
     _v2.setFromMatrixPosition(this.pairs[0].S.matrixWorld).sub(this.srcHips0).multiplyScalar(this.ratio).add(this.dstHips0).applyMatrix4(this.hipsParentInv);
     this.hips.position.copy(_v2);
+    if (this.follow.length) {
+      this.dst.updateMatrixWorld(true);
+      for (const fo of this.follow) {
+        if (fo.rot) _m1.multiplyMatrices(fo.target.matrixWorld, fo.rel);
+        else { _m1.copy(fo.ik.matrixWorld); _v1.setFromMatrixPosition(fo.target.matrixWorld).add(fo.dPos); _m1.setPosition(_v1); }
+        _m2.copy(fo.ik.parent.matrixWorld).invert().multiply(_m1);
+        _m2.decompose(_v1, _q1, _s1); fo.ik.position.copy(_v1); fo.ik.quaternion.copy(_q1);
+        fo.ik.updateMatrixWorld(true);
+      }
+    }
     if (this.chestPair) for (const w of this.wings) {   // 날갯짓 : 몸 앞뒤 축 기준 위아래 회전 + 펼치기
       const co = this.chestPair.out;
       _q1.setFromAxisAngle(_v1.set(0, 0, 1), w.sign * this.wingAngle);
@@ -567,6 +587,78 @@ class RetargetRig {
     }
   }
 }
+
+// 뼈 이름을 보고 Mixamo 이름으로 자동 연결 (여러 리그 규칙 : Mixamo · UE · Rigify · Biped · CC · 일반 Blender)
+function autoBoneMap(root) {
+  const bones = []; root.traverse(o => { if (o.isBone) bones.push(o); });
+  const norm = n => n.replace(/_\d+$/, '').replace(/^.*[:|]/, '');
+  const low = b => norm(b.name).toLowerCase();
+  const sideOf = b => {
+    const n = norm(b.name);
+    if (/left/i.test(n)) return 'L';
+    if (/right/i.test(n)) return 'R';
+    if (/(^|[_.\s-])l([_.\s-]|$)/i.test(n) || /[a-z0-9]L$/.test(n)) return 'L';
+    if (/(^|[_.\s-])r([_.\s-]|$)/i.test(n) || /[a-z0-9]R$/.test(n)) return 'R';
+    return '';
+  };
+  const has = (b, re) => re.test(low(b));
+  const depth = o => { let d = 0; while (o.parent) { d++; o = o.parent; } return d; };
+  const map = {};
+  // 1) Mixamo 이름 그대로
+  for (const b of bones) { const m = norm(b.name).match(/^mixamorig\d*_?(\w+)$/i); if (m && !map[m[1]]) map[m[1]] = b; }
+  if (map.Hips && map.LeftArm && map.RightUpLeg) return map;
+  for (const k in map) delete map[k];
+  // 2) 일반 규칙
+  const pick = (re, side, excl) => bones.filter(b => has(b, re) && (!excl || !has(b, excl)) && (side == null || sideOf(b) === side)).sort((a, b) => depth(a) - depth(b))[0];
+  map.Hips = pick(/^(hips?|pelvis|root_?hips|bip\d*_?pelvis|cc_base_hip|def-hips|torso|hip)$/) || pick(/hips?|pelvis/, null, /thigh|leg/);
+  const spines = bones.filter(b => has(b, /spine|chest|torso|abdomen/) && !has(b, /tail|wing/) && b !== map.Hips).sort((a, b) => depth(a) - depth(b));
+  if (spines.length) { map.Spine = spines[0]; map.Spine1 = spines[Math.min(1, spines.length - 1)]; map.Spine2 = spines[spines.length - 1]; }
+  if (map.Spine1 === map.Spine) delete map.Spine1;
+  if (map.Spine2 === map.Spine1 || map.Spine2 === map.Spine) delete map.Spine2;
+  map.Neck = pick(/neck/, null, /tail/); map.Head = pick(/^(head|def-head|bip\d*_?head|cc_base_head)$/) || pick(/head/, null, /end|top|nub|tail/);
+  for (const [S, s] of [['Left', 'L'], ['Right', 'R']]) {
+    map[S + 'Shoulder'] = pick(/clavicle|shoulder|collar/, s, /twist|pad|armor/);
+    map[S + 'Arm'] = pick(/upper_?arm|upperarm|^arm|_arm$|uparm|bicep/, s, /fore|lower|twist|pad/) || pick(/arm/, s, /fore|lower|twist|pad|hand|forearm/);
+    map[S + 'ForeArm'] = pick(/fore_?arm|lower_?arm|lowerarm|elbow/, s, /twist|pad/);
+    map[S + 'Hand'] = pick(/hand|wrist/, s, /finger|thumb|index|middle|ring|pinky|twist|weapon|prop|ik/);
+    map[S + 'UpLeg'] = pick(/thigh|up_?leg|upper_?leg|upperleg/, s, /twist/) || pick(/leg/, s, /lower|calf|shin|twist|knee/);
+    map[S + 'Leg'] = pick(/calf|shin|lower_?leg|lowerleg|knee|^leg|_leg$/, s, /up|upper|thigh|twist/);
+    map[S + 'Foot'] = pick(/foot|ankle/, s, /toe|ik|ball|heel/);
+  }
+  for (const k in map) if (!map[k]) delete map[k];
+  return map;
+}
+
+// 캐릭터별 뼈 연결표 (Mixamo 이름 → 모델 뼈의 기본 이름 : 끝의 _숫자 제거, 점·콜론 제거)
+const LR = (fn) => { const o = {}; for (const [S, s] of [['Left', 'L'], ['Right', 'R']]) Object.assign(o, fn(S, s)); return o; };
+const BONEMAPS = {
+  samurai: Object.assign({ Hips: 'CC_Base_Hip', Spine: 'CC_Base_Waist', Spine1: 'CC_Base_Spine01', Spine2: 'CC_Base_Spine02', Neck: 'CC_Base_NeckTwist01', Head: 'CC_Base_Head' },
+    LR((S, s) => ({ [S + 'Shoulder']: `CC_Base_${s}_Clavicle`, [S + 'Arm']: `CC_Base_${s}_Upperarm`, [S + 'ForeArm']: `CC_Base_${s}_Forearm`, [S + 'Hand']: `CC_Base_${s}_Hand`,
+      [S + 'UpLeg']: `CC_Base_${s}_Thigh`, [S + 'Leg']: `CC_Base_${s}_Calf`, [S + 'Foot']: `CC_Base_${s}_Foot` }))),
+  knight: Object.assign({ Hips: 'pelvis', Spine: 'spine_01', Spine1: 'spine_02', Spine2: 'spine_03', Neck: 'neck_01', Head: 'head' },
+    LR((S, s) => { s = s.toLowerCase(); return { [S + 'Shoulder']: `clavicle_${s}`, [S + 'Arm']: `upperarm_${s}`, [S + 'ForeArm']: `lowerarm_${s}`, [S + 'Hand']: `hand_${s}`,
+      [S + 'UpLeg']: `thigh_${s}`, [S + 'Leg']: `calf_${s}`, [S + 'Foot']: `foot_${s}` }; })),
+  mecha: Object.assign({ Hips: 'root_x', Spine: 'spine_01_x', Spine1: 'spine_03_x', Spine2: 'spine_05_x', Neck: 'neck_x', Head: 'head_x' },
+    LR((S, s) => { s = s.toLowerCase(); return { [S + 'Shoulder']: `shoulder_${s}`, [S + 'Arm']: `arm_stretch_${s}`, [S + 'ForeArm']: `forearm_stretch_${s}`, [S + 'Hand']: `hand_${s}`,
+      [S + 'UpLeg']: `thigh_stretch_${s}`, [S + 'Leg']: `leg_stretch_${s}`, [S + 'Foot']: `foot_${s}` }; })),
+  sorceress: Object.assign({ Hips: 'Pelvis', Spine: 'Spine', Spine2: 'Torso', Neck: 'Neck1', Head: 'Head' },
+    LR((S, s) => ({ [S + 'Shoulder']: `Shoulder${s}`, [S + 'Arm']: `Upper_Arm${s}`, [S + 'ForeArm']: `Forearm${s}`, [S + 'Hand']: `Wrist${s}`,
+      [S + 'UpLeg']: `Thigh${s}`, [S + 'Leg']: `LowerLeg${s}`, [S + 'Foot']: `Foot${s}` }))),
+  alien: Object.assign({ Hips: 'spine', Spine: 'spine001', Spine1: 'spine002', Spine2: 'spine003', Neck: 'spine004', Head: 'spine006' },
+    LR((S, s) => ({ [S + 'Shoulder']: `shoulder${s}`, [S + 'Arm']: `upper_arm${s}`, [S + 'ForeArm']: `forearm${s}`, [S + 'Hand']: `hand${s}`,
+      [S + 'UpLeg']: `thigh${s}`, [S + 'Leg']: `shin${s}`, [S + 'Foot']: `foot${s}` }))),
+  juggernaut: Object.assign({ Hips: 'spine1', Spine: 'spine2', Spine1: 'spine3', Spine2: 'spine4', Neck: 'neck', Head: 'head' },
+    LR((S, s) => ({ [S + 'Shoulder']: `shoulder${s}`, [S + 'Arm']: `arm1${s}`, [S + 'ForeArm']: `arm2${s}`, [S + 'Hand']: `arm3${s}`,
+      [S + 'UpLeg']: `leg1${s}`, [S + 'Leg']: `leg2${s}`, [S + 'Foot']: `leg4${s}` }))),
+  insect: Object.assign({ Hips: 'Pelvis', Spine: 'Spine', Spine2: 'Torso', Neck: 'Neck', Head: 'Head' },
+    LR((S, s) => { s = s.toLowerCase(); return { [S + 'Shoulder']: `Shoulder${s}`, [S + 'Arm']: `Bicep${s}`, [S + 'ForeArm']: `Forearm${s}`, [S + 'Hand']: `Claw${s}`,
+      [S + 'UpLeg']: `Thigh${s}`, [S + 'Leg']: `Shin${s}`, [S + 'Foot']: `Foot${s}` }; })),
+};
+BONEMAPS.officer = BONEMAPS.samurai;
+// 저거넛 : 손발 뼈가 IK 보조뼈에 달려 있어서, 팔다리 끝(_end)에 IK 뼈를 붙여 줌
+const BONEFOLLOW = { juggernaut: [['leg_IKL', 'leg3L_end'], ['leg_IKR', 'leg3R_end'], ['arm_IKL', 'arm2L_end'], ['arm_IKR', 'arm2R_end']],
+  sorceress: [['Hand_IKL', 'WristL', true], ['Hand_IKR', 'WristR', true]] };
+
 class Animator {
   constructor(mixer, clips) { this.mixer = mixer; this.actions = {}; for (const c of clips) this.actions[c.name] = mixer.clipAction(c); this.cur = null; this.curName = ''; }
   play(name, { loop = true, fade = 0.12, speed = 1, start = 0 } = {}) {
@@ -730,6 +822,7 @@ class Fighter {
       case 'down': if (this.hp > 0 && this.t >= 1.05) this.getUp(); break;
       case 'getup': if (this.t >= this.getupTime) { this.invuln = 0.35; this.toNeutral(); } break;
     }
+    if (this.noGrav && !/skill|cine|ultStart/.test(this.state) && this.t > 1.2) this.noGrav = false;   // 붙잡기 등이 끊겨도 공중에 떠 있지 않게
     if (this.airborne && !this.noGrav) this.vel.y -= GRAV * dt;
     if (grounded && /hitstun|blockstun|guardbreak|down|getup|ko|victory/.test(this.state)) { const f = Math.pow(0.86, dt * 60); this.vel.x *= f; this.vel.z *= f; }
     this.pos.addScaledVector(this.vel, dt);
@@ -846,6 +939,11 @@ class Fighter {
     this.trailHand.update(animDt); this.trailFoot.update(animDt);
   }
   flash(t = 0.1) { this.flashT = t; }
+  dispose() {   // 캐릭터를 바꿀 때 장면에서 제거
+    scene.remove(this.group); scene.remove(this.ring); scene.remove(this.trailHand.mesh); scene.remove(this.trailFoot.mesh);
+    for (let i = ghosts.length - 1; i >= 0; i--) if (ghosts[i].owner === this) { scene.remove(ghosts[i].wrap); ghosts.splice(i, 1); }
+    this.rig.mixer.stopAllAction();
+  }
 }
 
 // 공격 판정 / 피격 처리
@@ -857,6 +955,11 @@ function inStrike(att, def, reach, width) {
 }
 function applyHit(att, def, h, point, dirOverride) {
   if (def.invuln > 0 || def.hidden || /ko|down|getup|cine/.test(def.state)) return false;
+  if (def.state === 'skill' && def.sk && def.sk.def.counter && def.sk.ready && !def.sk.countered) {   // 철벽 반격
+    def.sk.countered = true; def.sk.ready = false; const cp = def.chest();
+    sparks(cp, COL.gold, 30, 10, 0.4, 0.25); spawnFlash(cp, COL.gold, 3, 0.15, TEX.star_06); spawnRing(cp, COL.gold, { size: 2.6, life: 0.3 }); sfx.block(); hitStop = 0.1;
+    return true;
+  }
   const toAtt = _v1.set(att.pos.x - def.pos.x, 0, att.pos.z - def.pos.z).normalize();
   const facing = def.fwd.dot(toAtt) > 0.2;
   const guarding = (def.state === 'guard' || def.state === 'blockstun') && facing;
@@ -874,6 +977,11 @@ function applyHit(att, def, h, point, dirOverride) {
     sparks(p, COL.blue, 16, 7, 0.3, 0.2); spawnRing(p, COL.blue, { size: 1.4, life: 0.2 }); spawnFlash(p, COL.blue, 1.6, 0.08, TEX.magic_05);
     hitStop = 0.05; shake = Math.max(shake, 0.06); sfx.block(); def.gainMeter(2);
   } else {
+    if (def.state === 'skill' && def.sk && def.sk.def.armor && !h.guardBreak) {   // 슈퍼아머 : 피해만 받고 계속
+      const dmgA = Math.max(1, Math.round(h.dmg * 0.8)); def.hp -= dmgA; def.flash(0.12); att.gainMeter(dmgA); hitFx(p, false, COL.white); hitStop = Math.max(hitStop, 0.05);
+      if (def.hp <= 0) koFx(def, f, p);
+      return true;
+    }
     if (/hitstun|air/.test(def.state) && att.comboTimer > 0) att.combo++; else { att.combo = 1; att.comboVo = false; }
     if (att.combo >= 5 && !att.comboVo) { att.comboVo = true; sfx.vo('combo'); }
     sfx.hurt(def, !!h.heavy);
@@ -994,6 +1102,7 @@ function updateProjectiles(dt) {
         if (pr.onHit) pr.onHit(p);
       }
     }
+    if (pr.kind === 'gen') dead = updateGen(pr, dt);
     if (dead) { if (pr.light) { pr.light.life = 0; pr.light.follow = null; } scene.remove(pr.grp); projectiles.splice(i, 1); }
   }
 }
@@ -1249,7 +1358,7 @@ function startCine(att, def) {
   const F = new V3(def.pos.x - att.pos.x, 0, def.pos.z - att.pos.z); if (F.lengthSq() < 1e-4) F.copy(att.fwdNew()); F.normalize();
   const R = new V3(-F.z, 0, F.x); if (R.dot(camSide) < 0) R.negate();   // 카메라가 있던 쪽
   Object.assign(cine, { active: true, att, def, O, F, R, t: 0, flags: {}, script: att.ult, dealt: 0 });
-  clearProjectiles();
+  clearProjectiles(); TIMERS.length = 0;
   for (const f of [att, def]) { f.setState('cine'); f.vel.set(0, 0, 0); f.noGrav = true; f.setHidden(false); f.sk = null; }
   att.yaw = Math.atan2(F.x, F.z); def.yaw = Math.atan2(-F.x, -F.z);
   $('cutWho').textContent = att.name; $('cutWhat').textContent = att.ult.name;
@@ -1422,6 +1531,975 @@ const ULT_MUTANT = {
     const k = seg(t, 4.6, 6.2); return { pos: at(c, lerp(-3, -5, k), lerp(1.2, 2.2, k), lerp(6, 8, k)), look: at(c, 2, lerp(2.5, 1.5, k), 0), fov: 50 };
   },
 };
+
+// =====================================================================
+//  새 캐릭터 스킬 : 공통 틀 (투사체 · 돌진 · 순간이동 · 내려찍기 · 지연 폭발) + 궁극기 연출 엔진
+// =====================================================================
+Object.assign(COL, {
+  violet: C(2.2, 0.6, 4.2), vflame: C(2.6, 0.9, 3.6), gold: C(3.6, 2.6, 0.8), holy: C(3.4, 3.0, 1.8), teal: C(0.5, 3.2, 2.8),
+  elec: C(1.4, 2.6, 4.2), acid: C(1.4, 3.6, 0.4), toxic: C(2.4, 3.4, 0.3), steel: C(2.4, 2.4, 2.6), thrust: C(3.4, 1.6, 0.5),
+  magenta: C(3.6, 0.6, 2.8), psy: C(0.8, 3.6, 1.4), blood: C(2.6, 0.25, 0.15), web: C(2.4, 2.4, 2.2),
+});
+const vec3c = c => new THREE.Vector3(c.r, c.g, c.b);   // 불기둥 셰이더용 색
+
+// ---------- 예약 실행 (게임 계산 안에서 시간이 지나면 실행 : 온라인에서도 두 PC가 똑같이) ----------
+const TIMERS = [];
+function later(delay, fn) { TIMERS.push({ t: delay, fn }); }
+function updateTimers(dt) { for (let i = TIMERS.length - 1; i >= 0; i--) { const tm = TIMERS[i]; tm.t -= dt; if (tm.t <= 0) { TIMERS.splice(i, 1); tm.fn(); } } }
+
+// ---------- 공용 이펙트 ----------
+function slashFx(p, dir, color, len = 3, width = 0.35, life = 0.25) {   // 베기 섬광 (길쭉한 빛줄기)
+  const m = new THREE.Mesh(PLANE_GEO(), new THREE.MeshBasicMaterial({ map: TEX.circle_05, color: new THREE.Color(color).multiplyScalar(0.9), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+  m.position.copy(p); m.lookAt(_v1.copy(p).add(dir)); m.rotateY(Math.PI / 2); m.rotateX(vrand(-0.6, 0.6));
+  const up = k => { m.scale.set(len * (1.15 - k * 0.15), width * k, 1); m.material.opacity = k; }; up(1);
+  addTransient(m, life, up);
+}
+function xSlash(p, color, size = 2.6) {   // X자 베기
+  for (const a of [0.75, -0.75]) {
+    const m = new THREE.Mesh(PLANE_GEO(), new THREE.MeshBasicMaterial({ map: TEX.circle_05, color: new THREE.Color(color), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+    m.position.copy(p); m.quaternion.copy(camera.quaternion); m.rotateZ(a);
+    const up = k => { m.scale.set(size * (1.3 - k * 0.3), 0.3 * k + 0.02, 1); m.material.opacity = k; }; up(1);
+    addTransient(m, 0.35, up);
+  }
+}
+function beam(from, to, color, width = 0.4, life = 0.3) {   // 빔 (원통)
+  const d = _v1.copy(to).sub(from), len = d.length();
+  const m = new THREE.Mesh(sharedGeo('beamCyl', () => new THREE.CylinderGeometry(1, 1, 1, 16, 1, true)), new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(0.8), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+  m.position.copy(from).addScaledVector(d, 0.5); m.quaternion.setFromUnitVectors(UP, d.clone().normalize());
+  const upM = k => { const w = width * (0.4 + 0.6 * k); m.scale.set(w, len, w); m.material.opacity = Math.min(1, k * 2); }; upM(1);
+  addTransient(m, life, upM);
+  const core = m.clone(); core.material = m.material.clone(); core.material.color.set(0xffffff).multiplyScalar(1.2);
+  const upC = k => { const w = width * 0.35 * k; core.scale.set(w, len, w); core.material.opacity = k; }; upC(1);
+  addTransient(core, life, upC);
+}
+function poof(p, color, n = 16) {   // 순간이동 연기 + 섬광
+  smokeBurst(p, 6, 1.1, 0.7); sparks(p, color, n, 7, 0.35, 0.22); spawnFlash(p, color, 2.4, 0.15, TEX.magic_05);
+  spawnRing(p, color, { size: 1.8, life: 0.25 }); sfx.whoosh(true);
+}
+function chargeFx(f, color, sys = 'magic') {   // 기 모으기
+  const c = f.chest(); _v1.randomDirection().multiplyScalar(1.2);
+  P[sys].spawn(_v2.copy(c).add(_v1), _v1.multiplyScalar(-2.6), color, 0.3, 0.4, 0.05, 1, 0, 6);
+}
+function groundBlast(p, color, size = 3, opts = {}) {   // 땅 폭발 공통
+  spawnRing(_v1.copy(p).setY(0.06), color, { size: size * 1.6, life: 0.45, flat: true, width: 0.8 });
+  sparks(_v1.copy(p).setY(0.4), color, 26, 10, 0.45, 0.28); dust(p, 10, 1.3, 4); debris(p, opts.debris ?? 14, 7);
+  decal(p, TEX.scorch_03, size * 1.2, 3.5, { color: 0x000000, opacity: 0.75 });
+  spawnLight(_v1.copy(p).setY(1), new THREE.Color(color).getHex(), 55, 12, 0.35); shake = Math.max(shake, opts.shake ?? 0.4); fovKick = Math.max(fovKick, 4);
+}
+function moveAnim(f, mv, mul = 1) { const m = MOVES[mv]; f.anim.play(m.clip, { loop: false, fade: 0.05, start: m.t0, speed: m.speed1 * mul }); return m; }
+
+// ---------- 범용 투사체 ----------
+function spawnGen(owner, p, vel, cfg) {
+  const grp = new THREE.Group(); grp.position.copy(p);
+  const col = cfg.color, size = cfg.size || 0.35;
+  if (cfg.look === 'rock') { const m = new THREE.Mesh(ROCK_GEO, ROCK_MAT); m.scale.setScalar(size * 2.2); grp.add(m); grp.userData.spin = m; }
+  else if (cfg.look === 'missile') {
+    const body = new THREE.Mesh(sharedGeo('missile', () => new THREE.CylinderGeometry(0.06, 0.09, 0.55, 10).rotateX(Math.PI / 2)), new THREE.MeshStandardMaterial({ color: 0x8a8f99, metalness: 0.8, roughness: 0.35 }));
+    body.scale.setScalar(size / 0.3); grp.add(body);
+    const fl = new THREE.Sprite(new THREE.SpriteMaterial({ map: TEX.circle_05, color: new THREE.Color(col).multiplyScalar(0.7), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
+    fl.scale.setScalar(size * 2.2); fl.position.z = -0.3 * size / 0.3; grp.add(fl); grp.userData.orient = true;
+  } else if (cfg.look === 'web') {
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: TEX.symbol_02, color: new THREE.Color(col).multiplyScalar(0.6), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
+    s.scale.setScalar(size * 3); grp.add(s); grp.userData.rot = s;
+  } else {
+    const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: TEX.circle_05, color: new THREE.Color(col).multiplyScalar(0.55), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
+    glow.scale.setScalar(size * 5); grp.add(glow);
+    const core = new THREE.Sprite(new THREE.SpriteMaterial({ map: TEX.circle_05, color: 0xffffff, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
+    core.scale.setScalar(size * 1.6); grp.add(core);
+    if (cfg.look === 'rune') { const r = new THREE.Sprite(new THREE.SpriteMaterial({ map: TEX.magic_04, color: new THREE.Color(col).multiplyScalar(0.7), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true })); r.scale.setScalar(size * 4); grp.add(r); grp.userData.rot = r; }
+    grp.userData.glow = glow;
+  }
+  scene.add(grp);
+  const pr = { kind: 'gen', owner, grp, vel: vel.clone(), age: 0, cfg, light: cfg.light ? grabLight(cfg.light, 30, 8, 99, grp) : null };
+  projectiles.push(pr); return pr;
+}
+function updateGen(pr, dt) {
+  const c = pr.cfg, p = pr.grp.position, def = G.opp(pr.owner);
+  if (c.homing && !def.hidden && pr.age > (c.homeDelay || 0)) {
+    const sp = pr.vel.length(); _v1.copy(def.chest()).sub(p).normalize().multiplyScalar(sp);
+    pr.vel.lerp(_v1, Math.min(1, c.homing * dt)).setLength(sp);
+  }
+  if (c.gravity) pr.vel.y -= c.gravity * dt;
+  p.addScaledVector(pr.vel, dt);
+  const u = pr.grp.userData;
+  if (u.spin) { u.spin.rotation.x += dt * 7; u.spin.rotation.z += dt * 4; }
+  if (u.rot) u.rot.material.rotation += dt * 8;
+  if (u.glow) u.glow.scale.setScalar((c.size || 0.35) * (5 + Math.sin(pr.age * 40) * 0.5));
+  if (u.orient) pr.grp.lookAt(_v1.copy(p).add(pr.vel));
+  const tsys = P[c.trail || 'magic'];
+  for (let k = 0; k < (c.trailN ?? 2); k++) { _v1.randomDirection().multiplyScalar(0.6).addScaledVector(pr.vel, -0.1); tsys.spawn(p, _v1, c.trailColor || c.color, c.trailLife || 0.3, (c.size || 0.35) * 2, 0.05, 0.9, 0, vrand(-4, 4)); }
+  let dead = pr.age > (c.life || 2.5) || Math.hypot(p.x, p.z) > ARENA_R + 10, direct = false;
+  const hitR = c.hitR || 0.75;
+  if (!dead && !def.hidden && Math.hypot(def.pos.x - p.x, def.pos.z - p.z) < hitR && p.y > def.pos.y - 0.2 && p.y < def.pos.y + def.height + 0.3) {
+    if (c.onHitDef) { if (c.onHitDef(pr, def, p)) { dead = true; direct = true; } }
+    else if (c.hit && applyHit(pr.owner, def, c.hit, p.clone())) { dead = true; direct = true; }
+  }
+  if (p.y < 0.12) dead = true;
+  if (dead) {
+    if (c.explode) c.explode(p.clone(), pr, direct);
+    else { sparks(p, c.color, 22, 10, 0.4, 0.26); spawnFlash(p, c.color, 2.2, 0.12, TEX.star_06); spawnRing(p, c.color, { size: 1.8, life: 0.25 }); }
+    if (c.aoe && (!direct || c.onHitDef)) aoeHit(pr.owner, p, c.aoe.r, c.aoe.hit, c.aoe.maxY ?? 1.6);
+  }
+  return dead;
+}
+
+// ---------- 스킬 틀 ----------
+function dashSkill(o) {   // 돌진 공격 (through : 상대를 통과하며 베고 잠깐 뒤 터짐)
+  const W = o.windup ?? 0.22, D = o.dur ?? 0.35, R = o.recover ?? 0.35;
+  return { name: o.name, desc: o.desc, cd: o.cd ?? 5, air: !!o.air, armor: o.armor,
+    start(f, opp, sk) {
+      f.vel.set(0, 0, 0); if (sk.air) f.noGrav = true;
+      if (o.windClip) f.anim.play(o.windClip, { loop: false, fade: 0.06, start: o.windStart || 0, speed: o.windSpeed || 1 });
+      if (o.onStart) o.onStart(f, sk);
+    },
+    update(f, opp, sk) {
+      const fw = f.fwdNew();
+      if (f.t < W) { chargeFx(f, o.color); f.faceOpp(opp, 10); if (sk.air) f.vel.set(0, 0, 0); return; }
+      if (f.t < W + D) {
+        if (once(sk, 'go')) {
+          if (o.clip) { if (MOVES[o.clip]) moveAnim(f, o.clip, o.clipMul || 1); else f.anim.play(o.clip, { loop: o.loop ?? false, fade: 0.05, start: o.clipStart || 0, speed: o.clipSpeed || 1 }); }
+          sfx.whoosh(true); if (o.sound) o.sound(); sk.from = f.pos.clone();
+          if (o.through) f.invuln = D + 0.12;
+          if (o.onGo) o.onGo(f, sk);
+        }
+        const sp = sk.stop ? 1 : o.speed ?? 12;
+        f.vel.x = fw.x * sp; f.vel.z = fw.z * sp; f.vel.y = sk.air ? (o.airVy ?? -2) : (o.vy ?? 0); if (o.vy) f.noGrav = true;
+        if (o.ghosts && frame % 2 === 0) spawnGhost(f);
+        const c = f.chest();
+        for (let i = 0; i < 2; i++) { _v1.randomDirection().multiplyScalar(0.5).addScaledVector(fw, -3); P[o.sys || 'magic'].spawn(_v2.copy(c).addScaledVector(_v1, 0.15), _v1, o.color, 0.3, 0.55, 0.1, 0.9, 0, 6); }
+        if (o.trail !== false) { const e = o.trail === 'foot' ? 'RightFoot' : 'RightHand'; f[o.trail === 'foot' ? 'trailFoot' : 'trailHand'].push(f.effPos(e), f.effPos(e.replace('Hand', 'ForeArm').replace('Foot', 'Leg')).lerp(f.effPos(e), 0.45)); }
+        if (o.tick) o.tick(f, sk);
+        if (!o.through && !f.hasHit && inStrike(f, opp, o.reach ?? 1.25, o.width ?? 0.8)) {
+          f.hasHit = applyHit(f, opp, o.hit, f.chest().addScaledVector(fw, 0.6));
+          if (f.hasHit) { sk.stop = true; if (o.onHit) o.onHit(f, opp, sk); }
+        }
+        return;
+      }
+      if (o.through && once(sk, 'cut')) {
+        f.noGrav = false;
+        const a = sk.from, b = f.pos, ab = _v1.copy(b).sub(a), L = ab.length() || 1, t = clamp(_v2.copy(opp.pos).sub(a).dot(ab) / (L * L), 0, 1);
+        const closest = _v3.copy(a).addScaledVector(ab, t), lat = Math.hypot(opp.pos.x - closest.x, opp.pos.z - closest.z);
+        slashFx(_v4.copy(a).lerp(b, 0.5).setY(1.1), ab.clone().normalize(), o.color, L + 1.2, 0.35, 0.4);
+        if (lat < 1.0 && Math.abs(opp.pos.y - f.pos.y) < 1.6) {
+          const dir = ab.clone().normalize();
+          later(0.16, () => { if (applyHit(f, opp, o.hit, opp.chest(), dir)) { xSlash(opp.chest(), o.color, 3); if (o.onHit) o.onHit(f, opp, sk); } });
+        }
+      }
+      f.vel.x *= 0.8; f.vel.z *= 0.8; f.noGrav = false;
+      if (f.t >= W + D + R) endSkill(f);
+    } };
+}
+function behindPos(f, opp, dist = 1.15) {   // 상대 뒤쪽 위치
+  const d = _v1.set(opp.pos.x - f.pos.x, 0, opp.pos.z - f.pos.z); if (d.lengthSq() < 1e-4) d.copy(f.fwd); d.normalize();
+  const p = opp.pos.clone().addScaledVector(d, dist); p.y = 0;
+  const r = Math.hypot(p.x, p.z); if (r > ARENA_R - 0.3) p.multiplyScalar((ARENA_R - 0.3) / r);
+  return p;
+}
+function blinkSkill(o) {   // 사라졌다가 상대 뒤에 나타나 공격
+  const V = o.vanish ?? 0.16, A = o.appear ?? 0.34;
+  return { name: o.name, desc: o.desc, cd: o.cd ?? 5, air: !!o.air,
+    start(f, opp, sk) { f.vel.set(0, 0, 0); f.noGrav = !!sk.air; f.anim.play(o.preClip || 'block', { loop: false, fade: 0.06, start: 0, speed: 1.6 }); },
+    update(f, opp, sk) {
+      if (f.t < V) { chargeFx(f, o.color); return; }
+      if (once(sk, 'vanish')) { poof(f.chest(), o.color); f.setHidden(true); f.invuln = 0.6; if (o.onVanish) o.onVanish(f, sk); }
+      if (f.t < A) return;
+      if (once(sk, 'appear')) {
+        f.pos.copy(behindPos(f, opp, o.dist ?? 1.15)); f.setHidden(false); f.faceOpp(opp); f.invuln = 0.1; f.noGrav = false;
+        poof(f.chest(), o.color, 10);
+        if (o.strike) { moveAnim(f, o.strike, o.strikeMul || 1.2); sk.st = f.t; }
+        if (o.burst) {
+          const p = f.pos.clone(); later(0.05, () => { groundBlast(p, o.color, o.burst.r); aoeHit(f, p, o.burst.r, o.burst.hit, 1.8); if (o.burst.fx) o.burst.fx(p); });
+        }
+      }
+      if (o.strike) {
+        const m = MOVES[o.strike]; f.trailHand.push(f.effPos('RightHand'), f.effPos('RightForeArm').lerp(f.effPos('RightHand'), 0.45));
+        if (!f.hasHit && f.t >= sk.st + m.startup / (o.strikeMul || 1.2) - 0.02 && f.t <= sk.st + 0.4 && inStrike(f, opp, 1.6, 0.9)) {
+          f.hasHit = applyHit(f, opp, o.hit, f.effPos(m.eff)); if (f.hasHit) { xSlash(opp.chest(), o.color, 2.4); if (o.onHit) o.onHit(f, opp, sk); }
+        }
+      }
+      if (f.t >= A + (o.recover ?? 0.5)) endSkill(f);
+    } };
+}
+function slamSkill(o) {   // 내려찍기 / 발구르기 : 주변 범위 공격
+  const I = o.impactT ?? 0.45;
+  return { name: o.name, desc: o.desc, cd: o.cd ?? 5, air: false,
+    start(f, opp, sk) {
+      const clip = o.clip || 'slam', ci = CI[clip], t0 = Math.max(0, ci.tMin - 0.75);
+      f.anim.play(clip, { loop: false, fade: 0.08, start: o.clipStart ?? t0, speed: o.clipSpeed ?? clamp((ci.tMin - t0) / I, 0.6, 3) });
+      f.vel.set(0, 0, 0); if (o.jump) { f.vel.y = o.jump; f.pos.y = 0.01; }
+    },
+    update(f, opp, sk) {
+      if (f.t < I) { chargeFx(f, o.color); if (o.jump) { const fw = f.fwdNew(); f.vel.x = fw.x * (o.jumpFwd || 0); f.vel.z = fw.z * (o.jumpFwd || 0); } return; }
+      if (once(sk, 'impact')) {
+        f.vel.set(0, 0, 0); f.pos.y = 0;
+        const p = f.pos.clone().addScaledVector(f.fwdNew(), o.offset ?? 0.9);
+        groundBlast(p, o.color, o.r); sfx.slam(); sfx.crack();
+        if (o.fx) o.fx(p, f);
+        aoeHit(f, p, o.r, o.hit, o.maxY ?? 1.4);
+      }
+      if (f.t >= I + (o.recover ?? 0.6)) f.toNeutral();
+    } };
+}
+function runeSkill(o) {   // 상대 발밑에 표식 → 잠시 뒤 폭발 (시전자는 먼저 자유)
+  const C0 = o.castT ?? 0.35;
+  return { name: o.name, desc: o.desc, cd: o.cd ?? 6, air: !!o.air,
+    start(f, opp, sk) { const ci = CI[o.clip || 'spell_up']; f.anim.play(o.clip || 'spell_up', { loop: false, fade: 0.08, start: o.clipStart ?? 0.2, speed: o.clipSpeed ?? 1.3 }); f.vel.set(0, 0, 0); if (sk.air) f.noGrav = true; },
+    update(f, opp, sk) {
+      if (sk.air) f.vel.set(0, 0, 0);
+      if (f.t < C0) { chargeFx(f, o.color); return; }
+      if (once(sk, 'cast')) {
+        const tgt = opp.pos.clone().addScaledVector(opp.vel, 0.12); tgt.y = 0;
+        const r = Math.hypot(tgt.x, tgt.z); if (r > ARENA_R) tgt.multiplyScalar(ARENA_R / r);
+        decal(tgt, TEX.circle_03, o.r * 2.2, o.delay + 0.2, { color: new THREE.Color(o.color).getHex(), additive: true, grow: -0.3 });
+        const mc = magicCircle(_v1.copy(tgt).setY(0.05), new THREE.Color(o.color).getHex()); later(o.delay, () => { mc.fade = true; });
+        sfx.play('charge', 0.5, 1.2);
+        later(o.delay, () => {
+          firePillar(tgt, o.r * 0.8, o.pillarH || 6, 0.9, vec3c(o.color)); groundBlast(tgt, o.color, o.r); sfx.boom();
+          aoeHit(f, tgt, o.r, o.hit, o.maxY ?? 2.4); if (o.fx) o.fx(tgt);
+        });
+      }
+      if (f.t >= C0 + (o.recover ?? 0.35)) endSkill(f);
+    } };
+}
+function shootSkill(o) {   // 투사체 발사 (여러 발 · 부채꼴 · 포물선)
+  const T0 = o.castT ?? 0.25, N = o.count ?? 1, GAP = o.gap ?? 0.1;
+  return { name: o.name, desc: o.desc, cd: o.cd ?? 3, air: !!o.air,
+    start(f, opp, sk) {
+      if (o.clip && MOVES[o.clip]) moveAnim(f, o.clip, o.clipMul || 0.9);
+      else { const ci = CI[o.clip || 'fireball'], t0 = Math.max(0, ci.peak - 0.6); f.anim.play(o.clip || 'fireball', { loop: false, fade: 0.08, start: o.clipStart ?? t0, speed: o.clipSpeed ?? (ci.peak - t0) / T0 }); }
+      if (sk.air) { f.vel.set(f.vel.x * 0.3, 0, f.vel.z * 0.3); f.noGrav = true; } else f.vel.set(0, 0, 0);
+      sk.n = 0;
+    },
+    update(f, opp, sk) {
+      if (sk.air) { if (f.t < T0 + N * GAP + 0.2) f.vel.y = 0; else f.noGrav = false; }
+      if (f.t < T0) { chargeFx(f, o.color); if (o.aim !== false) f.faceOpp(opp, 6); return; }
+      if (o.hold && once(sk, 'hold')) f.anim.speed = 0;
+      while (sk.n < N && f.t >= T0 + sk.n * GAP) {
+        const i = sk.n++, fw = f.fwdNew();
+        const yawOff = N > 1 && o.spread ? (i - (N - 1) / 2) * o.spread : 0;
+        const dir = _v1.copy(fw).applyAxisAngle(UP, yawOff);
+        const src = o.from === 'chest' ? f.chest().addScaledVector(fw, 0.5) : o.from === 'high' ? f.chest().add(_v2.set(0, 1.0, 0)).addScaledVector(fw, 0.3) : f.effPos(o.from || 'RightHand').addScaledVector(fw, 0.3);
+        const vel = dir.clone().multiplyScalar(o.speed || 14); vel.y = (o.vy ?? 0) + (sk.air ? -o.speed * 0.4 : 0);
+        if (o.lob) { const dist = Math.max(2, Math.hypot(opp.pos.x - f.pos.x, opp.pos.z - f.pos.z)); const tt = dist / (o.speed || 10); vel.y = (0.1 - src.y) / tt + 0.5 * (o.cfg.gravity || 12) * tt; }
+        spawnGen(f, src, vel, o.cfg);
+        spawnFlash(src, o.color, 1.6, 0.08, TEX.muzzle_02); if (o.sound) o.sound(i); else sfx.fire();
+        if (o.recoil) { f.vel.x -= fw.x * o.recoil; f.vel.z -= fw.z * o.recoil; }
+      }
+      f.vel.x *= 0.85; f.vel.z *= 0.85;
+      if (sk.air && !f.airborne && f.t > T0 + 0.2) { f.toNeutral(); return; }
+      if (f.t >= T0 + N * GAP + (o.recover ?? 0.35)) endSkill(f);
+    } };
+}
+
+// ---------- 궁극기 연출 엔진 ----------
+//  segs : [{ to, enter(c), tick(c, k, t), cam(c, k, t) }] — 각 구간은 앞 구간 끝 ~ to 초
+function cineStrikes(c, t, list, color, key = 's') {   // [[시각, 기술, 피해, 무거움]]
+  const { att } = c;
+  for (const [ht, mv, d, heavy] of list) {
+    if (t > ht - 0.13 && cineOnce(c, key + 'a' + ht)) { moveAnim(att, mv, 1.15); sfx.whoosh(heavy); }
+    if (t > ht && cineOnce(c, key + 'h' + ht)) cineHit(c, d, { heavy, color });
+  }
+  const tip = att.effPos('RightHand'); att.trailHand.push(tip, att.effPos('RightForeArm').lerp(tip, 0.45));
+  const ft = att.effPos('RightFoot'); att.trailFoot.push(ft, att.effPos('RightLeg').lerp(ft, 0.45));
+}
+const cineOnce = (c, k) => { if (c.flags[k]) return false; c.flags[k] = true; return true; };
+function finishCine(c, extra) {   // 마무리 일격 : 남은 피해 전부
+  cineHit(c, 99, { heavy: true, stop: 0.3, anim: false, color: c.script.color });
+  c.def.anim.play('knockdown', { loop: false, fade: 0.05, start: Math.max(0, CI.knockdown.lying - 0.9), speed: 1 });
+  screenFlash(0.25); shake = 0.9; fovKick = 9; sfx.boom(); darkTarget = 0;
+  if (extra) extra();
+}
+const camOrbit = (c, k, { r = 3.2, h = 1.3, a0 = 0.3, a1 = 1.6, lf = 0.7, lu = 1.2, fov = 44 } = {}) => {
+  const a = lerp(a0, a1, k); return { pos: at(c, lf - Math.cos(a) * r, h, Math.sin(a) * r), look: at(c, lf, lu, 0), fov };
+};
+const camFrom = (c, k, p0, p1, l0, l1, fov = 46) => ({ pos: at(c, lerp(p0[0], p1[0], k), lerp(p0[1], p1[1], k), lerp(p0[2], p1[2], k)), look: at(c, lerp(l0[0], l1[0], k), lerp(l0[1], l1[1], k), 0), fov });
+function mkUlt(o) {
+  const segs = o.segs; let from = 1.0; for (const s of segs) { s.from = from; from = s.to; }
+  return { name: o.name, desc: o.desc, dmg: o.dmg, dur: o.dur, color: o.color,
+    update(c, t) {
+      const { att, def } = c;
+      if (t < 1.0) {
+        if (cineOnce(c, 'in')) {
+          $('cutin').classList.remove('hidden');
+          att.anim.play(o.introClip || 'taunt', { loop: false, fade: 0.1, start: o.introStart ?? 0.3, speed: o.introSpeed ?? 1.4 });
+          def.anim.play('stagger', { loop: true, fade: 0.1, speed: 1.2 }); if (o.introSfx) o.introSfx(); else sfx.ult();
+        }
+        chargeFx(att, o.color); if (frame % 4 === 0) chargeFx(att, o.color, 'twirl');
+        at(c, 0, 0, 0, att.pos); at(c, 1.4, 0, 0, def.pos); shake = Math.max(shake, 0.04); return;
+      }
+      if (cineOnce(c, 'cutOut')) $('cutin').classList.add('hidden');
+      for (let i = 0; i < segs.length; i++) {
+        const s = segs[i];
+        if (t < s.to || i === segs.length - 1) {
+          if (cineOnce(c, 'seg' + i) && s.enter) s.enter(c);
+          if (s.tick) s.tick(c, clamp((t - s.from) / (s.to - s.from), 0, 1), t);
+          return;
+        }
+      }
+    },
+    camera(c, t) {
+      if (t < 1.0) return { pos: at(c, 1.0 + t * 0.3, 1.6, 2.3 - t * 0.5), look: at(c, 0.2, 1.45, 0), fov: 34 };
+      for (let i = 0; i < segs.length; i++) { const s = segs[i]; if (t < s.to || i === segs.length - 1) return s.cam(c, clamp((t - s.from) / (s.to - s.from), 0, 1), t); }
+    } };
+}
+
+// =====================================================================
+//  1) 흑염 사무라이
+// =====================================================================
+const SK_SAM_IAI = dashSkill({ name: '섬광 발도', desc: '눈에 안 보이는 속도로 지나가며 벤다', cd: 4, color: COL.violet, windup: 0.3, dur: 0.22, speed: 26, through: true, ghosts: true,
+  windClip: 'block', windStart: 0.1, windSpeed: 1.2, clip: 'cross', clipMul: 1.4, sound: () => sfx.play('swing', 0.9, 0.6),
+  hit: { dmg: 14, chip: 4, hitstun: 0.6, blockstun: 0.3, knock: 3, launch: 4, knockdown: true, heavy: true, fxColor: COL.violet } });
+const SK_SAM_SHADOW = blinkSkill({ name: '그림자 분신', desc: '그림자로 사라져 상대 뒤에서 나타나 벤다', cd: 5, color: COL.violet, strike: 'high_kick', strikeMul: 1.3,
+  hit: { dmg: 12, chip: 3, hitstun: 0.55, blockstun: 0.25, knock: 4, launch: 5, heavy: true, fxColor: COL.violet } });
+const SK_SAM_VORTEX = {   // 흑염 회오리 : 제자리 회전 베기 3연타
+  name: '흑염 회오리', desc: '보라 불꽃을 두르고 회전하며 세 번 벤다', cd: 6, air: true,
+  start(f, opp, sk) { f.anim.play('spin_kick', { loop: true, fade: 0.06, start: 0, speed: CI.spin_kick.dur / 0.5 }); f.vel.set(0, sk.air ? 0 : 0, 0); f.noGrav = !!sk.air; sk.hits = 0; sfx.play('charge', 0.6, 1.5); },
+  update(f, opp, sk) {
+    const dx = opp.pos.x - f.pos.x, dz = opp.pos.z - f.pos.z, dd = Math.hypot(dx, dz) || 1, adv = dd > 1.2 ? 4.2 : 0;
+    f.vel.set(dx / dd * adv, sk.air ? -0.5 : 0, dz / dd * adv);
+    const c = f.chest();
+    for (let i = 0; i < 4; i++) { const a = G.time * 20 + i * Math.PI / 2; P.fire.spawn(_v1.set(c.x + Math.cos(a) * 1.3, c.y + vrand(-0.7, 0.5), c.z + Math.sin(a) * 1.3), _v2.set(-Math.sin(a) * 4, 1.5, Math.cos(a) * 4), COL.vflame, 0.35, 0.8, 0.2, 0.9, -1, 6); }
+    if (frame % 2 === 0) spawnGhost(f);
+    f.yaw += SDT * 18;
+    if (sk.hits < 3 && f.t > 0.18 + sk.hits * 0.24) {
+      const last = sk.hits === 2; sk.hits++; sfx.whoosh(true);
+      spawnRing(_v1.copy(f.pos).setY(1), COL.violet, { size: 4.2, life: 0.25 });
+      aoeHit(f, f.pos, 2.1, { dmg: last ? 8 : 5, chip: 2, hitstun: 0.45, blockstun: 0.2, knock: last ? 6 : 1, launch: last ? 6 : 0, knockdown: last, heavy: last, fxColor: COL.vflame }, 2.2);
+    }
+    if (f.t >= 1.0) { f.faceOpp(opp); endSkill(f); }
+  },
+};
+const ULT_SAMURAI = mkUlt({ name: '흑염 천참', desc: '순간이동하며 천 번 베고 X자 일섬으로 끝낸다', dmg: 42, dur: 6.0, color: COL.violet, introClip: 'block', introStart: 0, introSpeed: 0.8,
+  introSfx: () => { sfx.ult(); sfx.play('swing', 0.8, 0.5); },
+  segs: [
+    { to: 3.3, enter(c) { darkTarget = 0.8; c.def.anim.play('hit_big', { loop: false, fade: 0.1, speed: 0.6 }); },
+      tick(c, k, t) {   // 1) 순간이동 난도질 : 여섯 방향
+        const { att, def } = c; at(c, 1.4, 0.4 + Math.sin(k * Math.PI) * 0.6, 0, def.pos);
+        for (let i = 0; i < 7; i++) {
+          const ht = 1.15 + i * 0.3;
+          if (t > ht - 0.1 && cineOnce(c, 'tp' + i)) {
+            const a = i * 2.3 + 0.4, r = 1.2; poof(att.chest(), COL.violet, 8);
+            att.pos.copy(def.pos).add(_v1.set(Math.cos(a) * r, 0, Math.sin(a) * r)); att.pos.y = def.pos.y;
+            att.yaw = Math.atan2(def.pos.x - att.pos.x, def.pos.z - att.pos.z); spawnGhost(att);
+            moveAnim(att, i % 2 ? 'cross' : 'high_kick', 1.4);
+          }
+          if (t > ht && cineOnce(c, 'th' + i)) { cineHit(c, 4, { color: COL.violet }); slashFx(def.chest(), _v2.set(vrand(-1, 1), vrand(-0.6, 0.6), vrand(-1, 1)).normalize(), COL.violet, 3.4, 0.3, 0.3); }
+        }
+        att.noGrav = true;
+      },
+      cam: (c, k) => camOrbit(c, k, { r: 4.2, h: 1.8, a0: 0.4, a1: 2.6, lf: 1.4, lu: 1.3, fov: 48 }) },
+    { to: 4.4, enter(c) {   // 2) 상대 등 뒤에서 칼을 거둠
+        const { att, def } = c; poof(att.chest(), COL.violet); at(c, 2.9, 0, 0, att.pos); att.yaw = Math.atan2(c.F.x, c.F.z);
+        att.anim.play('block', { loop: false, fade: 0.1, start: 0, speed: 0.5 }); def.anim.play('stagger', { loop: true, fade: 0.1, speed: 0.5 }); darkTarget = 1;
+      },
+      tick(c, k) { at(c, 1.4, 0, 0, c.def.pos); timeScale = 0.6; },
+      cam: (c, k) => camFrom(c, k, [4.6, 0.7, 1.6], [4.3, 0.9, 2.2], [2.2, 1.3], [2.0, 1.3], 40) },
+    { to: 6.0, enter(c) {   // 3) X자 일섬 폭발
+        const p = c.def.chest(); xSlash(p, COL.violet, 6); firePillar(c.def.pos.clone(), 1.4, 8, 1.2, vec3c(COL.vflame));
+        fireBurst(p, 50, 1.6, COL.vflame); sparks(p, COL.violet, 80, 16, 0.7, 0.35); spawnRing(p, COL.violet, { size: 6, life: 0.5 });
+        finishCine(c);
+      },
+      tick(c, k) { at(c, 1.4 + k * 1.2, Math.sin(k * Math.PI) * 2, 0, c.def.pos); },
+      cam: (c, k) => camFrom(c, k, [-1.2, 0.6, 3.4], [-2.4, 1.4, 5.2], [1.8, 1.4], [2.0, 1.0], 46) },
+  ] });
+
+// =====================================================================
+//  2) 중갑 기사 (성기사)
+// =====================================================================
+const SK_KN_BASH = dashSkill({ name: '방패 돌진', desc: '방패를 앞세워 돌진, 막기를 부순다', cd: 5, color: COL.gold, windup: 0.2, dur: 0.45, speed: 10.5, armor: true,
+  clip: 'run', clipSpeed: 1.6, loop: true, reach: 1.15, width: 0.95,
+  hit: { dmg: 13, chip: 4, hitstun: 0.6, knock: 8, launch: 4.5, knockdown: true, heavy: true, guardBreak: true, fxColor: COL.gold },
+  onHit: (f) => moveAnim(f, 'cross', 1.2) });
+const SK_KN_SMITE = slamSkill({ name: '성광 강타', desc: '검을 내리찍어 황금 충격파를 일으킨다', cd: 5, color: COL.gold, r: 2.8, impactT: 0.5,
+  hit: { dmg: 15, chip: 4, hitstun: 0.7, blockstun: 0.3, knock: 5, launch: 7, knockdown: true, heavy: true, fxColor: COL.holy },
+  fx: (p) => { firePillar(p, 1.0, 5, 0.8, vec3c(COL.holy)); sfx.play('glass', 0.5, 1.4); } });
+const SK_KN_COUNTER = {   // 철벽 반격 : 자세를 잡고 있다가 맞으면 반격
+  name: '철벽 반격', desc: '방어 자세 중에 맞으면 피해 없이 바로 반격', cd: 6, air: false, counter: true,
+  start(f, opp, sk) { f.vel.set(0, 0, 0); f.anim.play('block', { loop: false, fade: 0.06, start: Math.max(0, CI.block.hold - 0.2), speed: 1.4 }); sk.ready = true; spawnRing(f.chest(), COL.gold, { size: 2.6, life: 0.3 }); sfx.play('metal', 0.6, 0.8); },
+  update(f, opp, sk) {
+    if (f.anim.time >= CI.block.hold) f.anim.speed = 0;
+    if (sk.ready && frame % 3 === 0) { _v1.randomDirection().multiplyScalar(1.1); P.magic.spawn(_v2.copy(f.chest()).add(_v1), _v1.multiplyScalar(-1), COL.gold, 0.3, 0.4, 0.05, 1, 0, 3); }
+    if (sk.countered) {
+      if (once(sk, 'strike')) { f.faceOpp(opp); moveAnim(f, 'uppercut', 1.4); sk.ct = f.t; floatText(f.chest().add(_v1.set(0, 0.8, 0)), 'COUNTER!', '#ffd34a'); sfx.play('metal', 0.9, 1.2); hitStop = 0.12; }
+      if (!f.hasHit && f.t > sk.ct + 0.1) {
+        const p = opp.chest(); f.hasHit = true;
+        applyHit(f, opp, { dmg: 16, chip: 4, hitstun: 0.8, knock: 5, launch: 8, knockdown: true, heavy: true, guardBreak: true, fxColor: COL.holy }, p);
+        firePillar(opp.pos.clone(), 1.0, 5, 0.8, vec3c(COL.holy)); spawnRing(p, COL.gold, { size: 3.5, life: 0.35 });
+      }
+      if (f.t > sk.ct + 0.6) f.toNeutral();
+      return;
+    }
+    if (f.t > 0.95) { sk.ready = false; f.toNeutral(); }
+  },
+};
+const ULT_KNIGHT = mkUlt({ name: '성검 심판', desc: '방패 연타로 띄우고 하늘의 빛기둥으로 심판한다', dmg: 40, dur: 6.2, color: COL.gold, introClip: 'flex', introStart: 0.4, introSpeed: 1.2,
+  segs: [
+    { to: 2.5, enter(c) { c.def.anim.play('hit', { loop: false, fade: 0.05 }); },
+      tick(c, k, t) {
+        at(c, 0, 0, 0, c.att.pos);
+        cineStrikes(c, t, [[1.2, 'jab', 4, false], [1.5, 'cross', 4, false], [1.8, 'jab', 4, false], [2.15, 'uppercut', 6, true]], COL.gold);
+        const up = t > 2.15 ? smooth(seg(t, 2.15, 2.5)) * 3.5 : 0; at(c, 1.35, up, 0, c.def.pos);
+        if (up > 0.2 && cineOnce(c, 'fall')) c.def.anim.play('falling', { loop: true, fade: 0.1 });
+      },
+      cam: (c, k) => camOrbit(c, k, { r: 2.6, h: 1.3, a0: 0.5, a1: 1.3, lf: 0.7, lu: 1.3, fov: 42 }) },
+    { to: 4.1, enter(c) { c.att.anim.play('spell_up', { loop: false, fade: 0.15, start: 0.2, speed: 1.1 }); darkTarget = 0.9; c.mc = magicCircle(at(c, 1.35, 0.05, 0), 0xffd060); sfx.ult(); },
+      tick(c, k, t) {
+        at(c, 0, 0, 0, c.att.pos); at(c, 1.35, 3.5 + Math.sin(t * 3) * 0.2, 0, c.def.pos);
+        for (let i = 0; i < 4; i++) {
+          if (t > 2.8 + i * 0.3 && cineOnce(c, 'p' + i)) {
+            const p = at(c, 1.35 + vrand(-0.3, 0.3), 0, vrand(-0.3, 0.3)); firePillar(p, 0.9, 12, 0.7, vec3c(COL.holy));
+            cineHit(c, 4, { heavy: i === 3, color: COL.holy, anim: false }); sfx.play('glass', 0.6, 1.2 + i * 0.1); sparks(c.def.chest(), COL.gold, 30, 12, 0.5, 0.3);
+          }
+        }
+      },
+      cam: (c, k) => camFrom(c, k, [-1.5, 0.4, 3.0], [-0.5, 0.3, 4.2], [1.2, 2.6], [1.3, 3.4], 50) },
+    { to: 6.2, enter(c) { const ci = CI.slam, t0 = Math.max(0, ci.tMin - 0.9); c.att.anim.play('slam', { loop: false, fade: 0.08, start: t0, speed: (ci.tMin - t0) / 0.7 }); sfx.whoosh(true); },
+      tick(c, k, t) {
+        const kk = seg(t, 4.1, 4.8);
+        at(c, lerp(0, 1.0, kk), Math.sin(kk * Math.PI) * 4.5, 0, c.att.pos); at(c, 1.4, lerp(3.5, 0, smooth(kk)), 0, c.def.pos);
+        if (kk >= 1 && cineOnce(c, 'smash')) {
+          const p = c.def.pos.clone(); groundBlast(p, COL.gold, 5, { shake: 0.8 }); firePillar(p, 1.8, 14, 1.4, vec3c(COL.holy));
+          for (let i = 0; i < 8; i++) { const a = i / 8 * Math.PI * 2; firePillar(p.clone().add(_v1.set(Math.cos(a) * 2.6, 0, Math.sin(a) * 2.6)), 0.5, 5, 0.9, vec3c(COL.gold)); }
+          if (c.mc) c.mc.fade = true; finishCine(c);
+        }
+      },
+      cam: (c, k) => camFrom(c, k, [-2.2, 1.2, 4.0], [-3.6, 2.4, 6.5], [1.2, 2.2], [1.4, 1.0], 50) },
+  ] });
+
+// =====================================================================
+//  3) SF 장교
+// =====================================================================
+const BOLT = (dmg, color = COL.teal) => ({ look: 'orb', color, size: 0.16, speed: 26, life: 1.2, trail: 'spark', trailN: 2, trailLife: 0.15, hitR: 0.6, light: 0x40ffe0,
+  hit: { dmg, chip: 1, hitstun: 0.28, blockstun: 0.12, knock: 1.6, fxColor: color } });
+const SK_OF_BURST = shootSkill({ name: '3점사', desc: '플라즈마 탄을 빠르게 세 발 쏜다', cd: 2.5, air: true, color: COL.teal, clip: 'cross', clipMul: 0.8, hold: true, castT: 0.2, count: 3, gap: 0.11, speed: 26,
+  from: 'RightHand', cfg: BOLT(5), recover: 0.3, sound: () => sfx.play('plasma', 0.5, 1.6) });
+const SK_OF_GRENADE = shootSkill({ name: '섬광 수류탄', desc: '포물선으로 던진 수류탄이 터진다', cd: 5, color: COL.elec, clip: 'fireball', castT: 0.3, count: 1, speed: 9, lob: true,
+  cfg: { look: 'orb', color: COL.elec, size: 0.18, gravity: 12, life: 3, trail: 'spark', trailN: 1, hitR: 0.5, light: 0x80c0ff,
+    onHitDef: () => true,
+    aoe: { r: 2.3, hit: { dmg: 14, chip: 4, hitstun: 0.7, blockstun: 0.3, knock: 6, launch: 6.5, knockdown: true, heavy: true, fxColor: COL.elec } },
+    explode: (p) => { groundBlast(p, COL.elec, 2.4); spawnFlash(p, COL.white, 4, 0.15, TEX.star_06); screenFlash(0.12); sfx.boom(); sfx.play('explode', 0.7, 1.2); } },
+  sound: () => sfx.whoosh() });
+const SK_OF_BATON = dashSkill({ name: '전기 충격봉', desc: '전기봉을 들고 돌진해 감전시킨다', cd: 5, color: COL.elec, windup: 0.18, dur: 0.32, speed: 11, sys: 'spark',
+  clip: 'jab', clipMul: 1, reach: 1.3, sound: () => sfx.play('plasma', 0.6, 2),
+  hit: { dmg: 11, chip: 3, hitstun: 1.0, blockstun: 0.3, knock: 1.5, heavy: true, fxColor: COL.elec },
+  onHit: (f, opp) => { for (let i = 0; i < 6; i++) later(i * 0.12, () => sparks(opp.chest(), COL.elec, 12, 6, 0.25, 0.2)); opp.flash(0.6); } });
+const ULT_OFFICER = mkUlt({ name: '궤도 폭격', desc: '근접 사격 후 위성 레이저를 내리꽂는다', dmg: 38, dur: 6.2, color: COL.teal, introClip: 'taunt',
+  segs: [
+    { to: 2.3, enter(c) { moveAnim(c.att, 'cross', 0.8); c.att.anim.speed = 0; },
+      tick(c, k, t) {
+        at(c, 0, 0, 0, c.att.pos); at(c, 1.5, 0, 0, c.def.pos);
+        for (let i = 0; i < 8; i++) if (t > 1.1 + i * 0.13 && cineOnce(c, 'b' + i)) {
+          const src = c.att.effPos('RightHand'), dst = c.def.chest().add(_v1.set(vrand(-0.2, 0.2), vrand(-0.3, 0.3), 0));
+          beam(src, dst, COL.teal, 0.05, 0.1); spawnFlash(src, COL.teal, 1.2, 0.06, TEX.muzzle_02); sfx.play('plasma', 0.4, 1.7);
+          cineHit(c, 2.2, { color: COL.teal, stop: 0.02, point: dst });
+        }
+      },
+      cam: (c, k) => camFrom(c, k, [-0.8, 1.55, 0.9], [-0.6, 1.5, 1.6], [1.2, 1.4], [1.4, 1.3], 40) },
+    { to: 3.0, enter(c) { moveAnim(c.att, 'kick', 1.2); },
+      tick(c, k, t) { at(c, 0, 0, 0, c.att.pos); if (t > 2.45 && cineOnce(c, 'kick')) { cineHit(c, 5, { heavy: true, color: COL.teal, anim: false }); c.def.anim.play('knockdown', { loop: false, fade: 0.05, start: 0, speed: 1.2 }); }
+        at(c, 1.5 + (t > 2.45 ? smooth(seg(t, 2.45, 3.0)) * 3 : 0), t > 2.45 ? Math.sin(seg(t, 2.45, 3.0) * Math.PI) * 1.2 : 0, 0, c.def.pos); },
+      cam: (c, k) => camOrbit(c, k, { r: 3.6, h: 1.2, a0: 1.2, a1: 1.6, lf: 1.6, lu: 1.0, fov: 46 }) },
+    { to: 4.6, enter(c) { c.att.anim.play('spell_up', { loop: false, fade: 0.15, start: 0.2, speed: 1.0 }); darkTarget = 1; decal(at(c, 4.5, 0, 0), TEX.circle_03, 4, 3, { color: 0x30ffe0, additive: true, grow: -0.3 }); sfx.play('charge', 0.8, 0.8); },
+      tick(c, k, t) {
+        at(c, 0, 0, 0, c.att.pos); at(c, 4.5, 0, 0, c.def.pos);
+        for (let i = 0; i < 3; i++) if (t > 3.3 + i * 0.35 && cineOnce(c, 'l' + i)) { const p = at(c, 4.5 + vrand(-0.6, 0.6), 0, vrand(-0.6, 0.6)); beam(p.clone().setY(30), p, COL.teal, 0.25, 0.25); groundBlast(p, COL.teal, 1.5); cineHit(c, 3, { color: COL.teal, anim: false }); sfx.play('plasma', 0.7, 0.8); }
+      },
+      cam: (c, k) => camFrom(c, k, [1.0, 2.5, 6.5], [0.5, 4, 8], [4.2, 1.5], [4.4, 3.5], 52) },
+    { to: 6.2, enter(c) { const p = c.def.pos.clone(); beam(p.clone().setY(40), p, COL.teal, 1.6, 0.9); firePillar(p, 2, 16, 1.3, vec3c(COL.teal)); groundBlast(p, COL.teal, 6, { shake: 1 }); finishCine(c); sfx.play('explosion', 0.9, 1); },
+      tick(c, k) { at(c, 4.5, Math.sin(k * Math.PI) * 2, 0, c.def.pos); },
+      cam: (c, k) => camFrom(c, k, [0.5, 1.0, 7.5], [-0.5, 2.0, 9.5], [4.4, 3.0], [4.5, 1.2], 54) },
+  ] });
+
+// =====================================================================
+//  4) 메카 전사
+// =====================================================================
+const SK_ME_ROCKET = shootSkill({ name: '로켓 펀치', desc: '주먹을 로켓처럼 날려 날려버린다', cd: 3.5, air: true, color: COL.thrust, clip: 'cross', clipMul: 0.8, castT: 0.25, count: 1, speed: 17,
+  cfg: { look: 'missile', color: COL.thrust, size: 0.45, life: 1.8, trail: 'fire', trailN: 3, trailColor: COL.fire, light: 0xff8a30,
+    hit: { dmg: 13, chip: 3, hitstun: 0.5, blockstun: 0.25, knock: 7, launch: 3.5, heavy: true, fxColor: COL.thrust },
+    explode: (p) => { fireBurst(p, 18, 1); sparks(p, COL.thrust, 20, 10, 0.4, 0.25); spawnRing(p, COL.thrust, { size: 2, life: 0.25 }); sfx.boom(); } },
+  sound: () => { sfx.fire(); sfx.play('metal', 0.5, 0.7); }, recoil: 2 });
+const SK_ME_MISSILES = shootSkill({ name: '미사일 일제사격', desc: '어깨에서 유도 미사일 여섯 발', cd: 6, color: COL.thrust, clip: 'spell_up', clipStart: 0.2, clipSpeed: 1.3, castT: 0.3, count: 6, gap: 0.08, spread: 0.2, speed: 10, vy: 3.5, from: 'high',
+  cfg: { look: 'missile', color: COL.thrust, size: 0.25, life: 3, homing: 7, homeDelay: 0.12, trail: 'smoke', trailN: 1, trailColor: COL.smoke, trailLife: 0.6, light: null,
+    hit: { dmg: 3, chip: 1, hitstun: 0.3, blockstun: 0.15, knock: 2, fxColor: COL.thrust },
+    explode: (p) => { fireBurst(p, 10, 0.7); sparks(p, COL.thrust, 10, 8, 0.3, 0.2); sfx.play('explode', 0.4, 1.4); } },
+  sound: () => sfx.play('fire', 0.4, 1.5) });
+const SK_ME_KNEE = dashSkill({ name: '부스터 니킥', desc: '분사로 돌진해 무릎으로 띄운다', cd: 5, air: true, color: COL.thrust, sys: 'fire', windup: 0.15, dur: 0.3, speed: 13, trail: 'foot',
+  clip: 'high_kick', clipMul: 1.2, reach: 1.3, sound: () => { sfx.fire(); sfx.play('metal', 0.4, 0.6); },
+  hit: { dmg: 13, chip: 3, hitstun: 0.7, knock: 3, launch: 9, knockdown: true, heavy: true, fxColor: COL.thrust },
+  tick: (f) => { const b = f.chest().addScaledVector(f.fwdNew(), -0.6); fireBurst(b, 2, 0.5); } });
+const ULT_MECHA = mkUlt({ name: '오버드라이브', desc: '분사 연타 후 하늘로 끌고 올라가 가슴 레이저', dmg: 42, dur: 6.2, color: COL.thrust, introClip: 'flex', introStart: 0.3,
+  introSfx: () => { sfx.ult(); sfx.play('metal', 0.8, 0.5); },
+  segs: [
+    { to: 2.6, enter(c) {}, tick(c, k, t) {
+        at(c, lerp(0, 0.4, k), 0, 0, c.att.pos); at(c, 1.35 + k * 0.4, 0, 0, c.def.pos);
+        cineStrikes(c, t, [[1.15, 'jab', 3.5, false], [1.4, 'cross', 3.5, false], [1.65, 'mid_kick', 3.5, false], [1.95, 'high_kick', 4, false], [2.35, 'spin_back', 5, true]], COL.thrust);
+        if (frame % 2 === 0) fireBurst(c.att.chest().addScaledVector(c.F, -0.6), 2, 0.6);
+      },
+      cam: (c, k) => camOrbit(c, k, { r: 3, h: 1.4, a0: 0.3, a1: 1.4, lf: 0.9, lu: 1.3, fov: 44 }) },
+    { to: 3.7, enter(c) { c.att.anim.play('fly', { loop: true, fade: 0.15, speed: 1.4 }); c.def.anim.play('falling', { loop: true, fade: 0.1 }); sfx.fire(); },
+      tick(c, k) { const h = smooth(k) * 6; at(c, 0.6, h, 0, c.att.pos); at(c, 1.5, h + 0.4, 0, c.def.pos); fireBurst(c.att.pos.clone().add(_v1.set(0, 0.3, 0)), 3, 0.8); },
+      cam: (c, k) => camFrom(c, k, [-1.5, 0.8, 4.5], [-1.0, 5.5, 5.5], [1.0, 1.5], [1.0, 6.5], 50) },
+    { to: 4.9, enter(c) { c.att.anim.play('fireball', { loop: false, fade: 0.1, start: 0.2, speed: 0.8 }); darkTarget = 0.8; },
+      tick(c, k, t) {
+        at(c, 0.6, 6, 0, c.att.pos); at(c, 1.5 + k * 2.5, 6.4 - k * 1.5, 0, c.def.pos);
+        for (let i = 0; i < 8; i++) if (t > 3.8 + i * 0.12 && cineOnce(c, 'ms' + i)) {
+          const src = c.att.chest().add(_v1.set(vrand(-0.5, 0.5), 0.8, vrand(-0.5, 0.5))), dst = c.def.chest();
+          beam(src, dst, COL.thrust, 0.06, 0.12); fireBurst(dst, 8, 0.6); sparks(dst, COL.thrust, 12, 9, 0.3, 0.2); sfx.play('explode', 0.5, 1.3); cineHit(c, 2.5, { color: COL.thrust, anim: false, stop: 0.02 });
+        }
+      },
+      cam: (c, k) => camFrom(c, k, [-2.0, 5.0, 3.5], [-2.5, 6.0, 5.0], [1.2, 6.0], [2.5, 5.5], 52) },
+    { to: 6.2, enter(c) { const s = c.att.chest().addScaledVector(c.F, 0.4), d = c.def.chest(); beam(s, d.clone().addScaledVector(d.clone().sub(s).normalize(), 20), COL.thrust, 0.9, 0.9); fireBurst(d, 40, 1.6); finishCine(c); },
+      tick(c, k) { at(c, 0.6, 6 - smooth(k) * 6, 0, c.att.pos); at(c, 4 + k * 2, Math.max(0, 4.9 - k * 6), 0, c.def.pos); },
+      cam: (c, k) => camFrom(c, k, [-3, 3, 6], [-4, 2, 8], [2, 4], [3, 1], 54) },
+  ] });
+
+// =====================================================================
+//  5) 용족 마법사
+// =====================================================================
+const SK_SO_ORB = shootSkill({ name: '비전 구체', desc: '상대를 따라가는 마력 구체', cd: 3, air: true, color: COL.magenta, castT: 0.3, count: 1, speed: 9,
+  cfg: { look: 'rune', color: COL.magenta, size: 0.32, life: 2.6, homing: 2.2, homeDelay: 0.15, trail: 'magic', trailN: 2, light: 0xff40d0,
+    hit: { dmg: 12, chip: 3, hitstun: 0.5, blockstun: 0.25, knock: 4.5, heavy: true, fxColor: COL.magenta } } });
+const SK_SO_BLINK = blinkSkill({ name: '공간 도약', desc: '상대 등 뒤로 순간이동해 마력 폭발', cd: 5, color: COL.magenta, appear: 0.3, recover: 0.45, preClip: 'spell_up',
+  burst: { r: 1.9, hit: { dmg: 11, chip: 3, hitstun: 0.6, blockstun: 0.25, knock: 5, launch: 5, knockdown: true, heavy: true, fxColor: COL.magenta }, fx: (p) => firePillar(p, 1.0, 4, 0.6, vec3c(COL.magenta)) } });
+const SK_SO_RUNE = runeSkill({ name: '마법진 폭발', desc: '상대 발밑에 마법진, 잠시 뒤 마력 기둥', cd: 6, color: COL.magenta, r: 1.7, delay: 0.75, pillarH: 8,
+  hit: { dmg: 16, chip: 4, hitstun: 0.8, blockstun: 0.3, knock: 2, launch: 9, knockdown: true, heavy: true, fxColor: COL.magenta } });
+const ULT_SORCERESS = mkUlt({ name: '용의 강림', desc: '구체 난사 후 거대 마법진에서 용의 불꽃이 쏟아진다', dmg: 40, dur: 6.4, color: COL.magenta, introClip: 'spell_up', introStart: 0.1, introSpeed: 0.9,
+  segs: [
+    { to: 2.3, enter(c) { c.att.anim.play('fireball', { loop: true, fade: 0.1, start: 0.2, speed: 1.6 }); },
+      tick(c, k, t) {
+        at(c, -0.5, 0, 0, c.att.pos); at(c, 1.8, 0, 0, c.def.pos);
+        for (let i = 0; i < 6; i++) if (t > 1.1 + i * 0.18 && cineOnce(c, 'o' + i)) {
+          const src = c.att.chest().addScaledVector(c.F, 0.5), dst = c.def.chest(); beam(src, dst, COL.magenta, 0.08, 0.15);
+          spawnFlash(dst, COL.magenta, 2.2, 0.1, TEX.magic_05); cineHit(c, 2.5, { color: COL.magenta, stop: 0.03 }); sfx.fire();
+        }
+      },
+      cam: (c, k) => camOrbit(c, k, { r: 3.4, h: 1.5, a0: 0.2, a1: 1.0, lf: 0.6, lu: 1.3, fov: 44 }) },
+    { to: 3.6, enter(c) { c.att.anim.play('spell_up', { loop: false, fade: 0.1, start: 0.2, speed: 0.9 }); c.def.anim.play('falling', { loop: true, fade: 0.1 }); c.mc = magicCircle(at(c, 1.8, 0.05, 0), 0xff40c0); darkTarget = 1; sfx.ult(); },
+      tick(c, k) { at(c, -0.5, smooth(k) * 1.5, 0, c.att.pos); at(c, 1.8, smooth(k) * 3, 0, c.def.pos); c.att.noGrav = true; chargeFx(c.def, COL.magenta); },
+      cam: (c, k) => camFrom(c, k, [-2.5, 0.6, 3.5], [-2.0, 1.0, 5.0], [1.0, 1.8], [1.2, 2.8], 50) },
+    { to: 5.0, enter(c) { c.mc2 = magicCircle(at(c, 1.8, 9, 0), 0xff60e0); },
+      tick(c, k, t) {
+        at(c, -0.5, 1.5, 0, c.att.pos); at(c, 1.8, 3 - smooth(k) * 3, 0, c.def.pos);
+        for (let i = 0; i < 10; i++) if (t > 3.65 + i * 0.12 && cineOnce(c, 'f' + i)) {
+          const p = at(c, 1.8 + vrand(-1.2, 1.2), 0, vrand(-1.2, 1.2)); beam(p.clone().setY(9), p, COL.magenta, 0.35, 0.3); fireBurst(p, 8, 0.8, COL.fire); groundBlast(p, COL.magenta, 1.2, { debris: 4, shake: 0.25 });
+          if (i % 2 === 0) cineHit(c, 2, { color: COL.magenta, anim: false, stop: 0.02 });
+        }
+      },
+      cam: (c, k) => camFrom(c, k, [-1.0, 2.5, 6.0], [0.0, 3.5, 7.5], [1.8, 2.5], [1.8, 1.0], 54) },
+    { to: 6.4, enter(c) { const p = c.def.pos.clone(); firePillar(p, 2.2, 16, 1.4, vec3c(COL.magenta)); beam(p.clone().setY(30), p, COL.magenta, 1.4, 0.8); groundBlast(p, COL.magenta, 6, { shake: 1 }); if (c.mc) c.mc.fade = true; if (c.mc2) c.mc2.fade = true; finishCine(c); },
+      tick(c, k) { at(c, -0.5, 1.5 - smooth(k) * 1.5, 0, c.att.pos); at(c, 1.8 + k, Math.sin(k * Math.PI) * 3, 0, c.def.pos); },
+      cam: (c, k) => camFrom(c, k, [-2, 1, 6], [-3.5, 2, 8.5], [1.8, 3], [2, 1.2], 54) },
+  ] });
+
+// =====================================================================
+//  6) 외계인
+// =====================================================================
+const SK_AL_ACID = shootSkill({ name: '산성 침', desc: '포물선 산성 덩어리, 터지면 주변까지 녹인다', cd: 3, color: COL.acid, clip: 'fireball', castT: 0.25, count: 1, speed: 11, lob: true, from: 'Head',
+  cfg: { look: 'orb', color: COL.acid, size: 0.28, gravity: 14, life: 3, trail: 'magic', trailN: 2, hitR: 0.7, light: 0x80ff40,
+    hit: { dmg: 11, chip: 3, hitstun: 0.5, blockstun: 0.25, knock: 3, heavy: true, fxColor: COL.acid },
+    aoe: { r: 1.6, hit: { dmg: 8, chip: 2, hitstun: 0.45, knock: 2, fxColor: COL.acid } },
+    explode: (p) => { sparks(p, COL.acid, 24, 8, 0.5, 0.3); decal(p.clone().setY(0), TEX.scorch_01, 2.4, 3, { color: 0x60ff20, additive: true, opacity: 0.6 }); smokeBurst(p, 4, 1); sfx.play('fire', 0.5, 0.7); } },
+  sound: () => sfx.play('monster', 0.4, 1.6) });
+const SK_AL_TK = {   // 염동력 : 앞쪽 상대를 공중에 들어올렸다가 내리꽂음
+  name: '염동력', desc: '상대를 공중에 띄워 붙잡았다가 땅에 내리꽂는다', cd: 6, air: false,
+  start(f, opp, sk) { f.anim.play('spell_up', { loop: false, fade: 0.08, start: 0.2, speed: 1.2 }); f.vel.set(0, 0, 0); sk.phase = 0; sfx.play('charge', 0.7, 0.8); },
+  update(f, opp, sk) {
+    if (sk.phase === 0) {
+      chargeFx(f, COL.psy);
+      if (f.t > 0.35) {
+        sk.phase = 1;
+        const dx = opp.pos.x - f.pos.x, dz = opp.pos.z - f.pos.z, d = Math.hypot(dx, dz), fw = f.fwdNew();
+        const inFront = d < 7 && (dx * fw.x + dz * fw.z) / Math.max(d, 1e-3) > 0.7 && !opp.hidden && opp.invuln <= 0 && !/ko|down|getup|cine/.test(opp.state);
+        const guarding = (opp.state === 'guard' || opp.state === 'blockstun') && opp.fwd.dot(_v1.set(-dx, 0, -dz).normalize()) > 0.2;
+        if (inFront && guarding) { applyHit(f, opp, { dmg: 0, chip: 4, blockstun: 0.4, knock: 3 }, opp.chest()); sk.phase = 3; }
+        else if (inFront) { sk.grab = true; opp.setState('hitstun'); opp.stun = 2; opp.noGrav = true; opp.anim.play('falling', { loop: true, fade: 0.1 }); spawnRing(opp.chest(), COL.psy, { size: 3, life: 0.4 }); sfx.play('glass', 0.5, 0.6); }
+        else sk.phase = 3;
+        sk.pt = 0;
+      }
+    } else if (sk.phase === 1) {
+      sk.pt += SDT; opp.vel.set(0, (3.2 - opp.pos.y) * 5, 0); opp.stun = 2;
+      if (frame % 2 === 0) { _v1.randomDirection().multiplyScalar(1); P.magic.spawn(_v2.copy(opp.chest()).add(_v1), _v1.multiplyScalar(-1.5), COL.psy, 0.3, 0.6, 0.1, 1, 0, 5); }
+      beam(f.effPos('RightHand'), opp.chest(), COL.psy, 0.04, 0.05);
+      if (sk.pt > 0.6) { sk.phase = 2; sk.pt = 0; f.anim.play('slam', { loop: false, fade: 0.08, start: Math.max(0, CI.slam.tMin - 0.25), speed: 1.4 }); }
+    } else if (sk.phase === 2) {
+      sk.pt += SDT; opp.noGrav = false; opp.vel.set(0, -22, 0);
+      if (!opp.airborne || sk.pt > 0.4) {
+        sk.phase = 3; opp.stun = 0;
+        groundBlast(opp.pos.clone(), COL.psy, 2.2, { shake: 0.6 }); sfx.slam(); sfx.boom();
+        applyHit(f, opp, { dmg: 16, chip: 0, hitstun: 0.8, knock: 2, launch: 4, knockdown: true, heavy: true, fxColor: COL.psy }, opp.chest());
+      }
+    } else if (f.t > (sk.grab ? 1.5 : 0.8)) { opp.noGrav = false; f.toNeutral(); }
+  },
+};
+const SK_AL_WELL = {   // 중력장 : 상대를 끌어당겼다가 폭발
+  name: '중력장', desc: '상대 근처에 중력장을 만들어 끌어당긴 뒤 폭발', cd: 6, air: false,
+  start(f, opp, sk) { f.anim.play('fireball', { loop: false, fade: 0.08, start: 0.2, speed: 1.1 }); f.vel.set(0, 0, 0); },
+  update(f, opp, sk) {
+    if (f.t < 0.3) { chargeFx(f, COL.psy); return; }
+    if (once(sk, 'make')) {
+      const p = f.pos.clone().lerp(opp.pos, 0.75); p.y = 1.0; sfx.play('charge', 0.8, 0.6);
+      const core = new THREE.Sprite(new THREE.SpriteMaterial({ map: TEX.twirl_02, color: new THREE.Color(COL.psy).multiplyScalar(0.7), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
+      core.position.copy(p);
+      addTransient(core, 1.1, k => { core.scale.setScalar(1.5 + (1 - k) * 1.5); core.material.rotation -= 0.3; core.material.opacity = Math.min(1, k * 3); });
+      const pullT = 1.0;
+      for (let i = 0; i < 20; i++) later(i * 0.05, () => {
+        if (opp.hidden || /ko|cine/.test(opp.state)) return;
+        const d = _v1.set(p.x - opp.pos.x, 0, p.z - opp.pos.z), L = d.length();
+        if (L < 4.5 && L > 0.3 && opp.invuln <= 0) opp.pos.addScaledVector(d.normalize(), Math.min(L - 0.2, 0.09));
+        _v2.randomDirection().multiplyScalar(2.2); P.magic.spawn(_v3.copy(p).add(_v2), _v2.multiplyScalar(-3), COL.psy, 0.3, 0.4, 0.05, 1, 0, 6);
+      });
+      later(pullT, () => { groundBlast(p.clone().setY(0), COL.psy, 2.4); spawnFlash(p, COL.psy, 5, 0.2, TEX.star_06); sfx.boom(); aoeHit(f, p, 2.2, { dmg: 13, chip: 4, hitstun: 0.7, blockstun: 0.3, knock: 6, launch: 6, knockdown: true, heavy: true, fxColor: COL.psy }, 2.5); });
+    }
+    if (f.t >= 0.7) f.toNeutral();
+  },
+};
+const ULT_ALIEN = mkUlt({ name: '모선 강림', desc: '염동력으로 들어올리고 모선의 광선으로 납치 · 폭발', dmg: 40, dur: 6.2, color: COL.psy, introClip: 'roar', introStart: 0.5, introSpeed: 1.2,
+  introSfx: () => { sfx.ult(); sfx.play('monster', 0.8, 1.3); },
+  segs: [
+    { to: 2.5, enter(c) { c.att.anim.play('spell_up', { loop: false, fade: 0.1, start: 0.2, speed: 0.8 }); c.def.anim.play('falling', { loop: true, fade: 0.1 }); },
+      tick(c, k, t) { at(c, 0, 0, 0, c.att.pos); at(c, 1.6, smooth(k) * 3 + Math.sin(t * 20) * 0.05, 0, c.def.pos); chargeFx(c.def, COL.psy); if (frame % 3 === 0) beam(c.att.effPos('RightHand'), c.def.chest(), COL.psy, 0.04, 0.06);
+        if (t > 1.6 && cineOnce(c, 'sq')) cineHit(c, 5, { color: COL.psy, anim: false }); if (t > 2.1 && cineOnce(c, 'sq2')) cineHit(c, 5, { color: COL.psy, anim: false }); },
+      cam: (c, k) => camOrbit(c, k, { r: 3.4, h: 1.0, a0: 0.4, a1: 1.2, lf: 0.8, lu: 1.8, fov: 46 }) },
+    { to: 4.0, enter(c) { c.ufo = magicCircle(at(c, 1.6, 11, 0), 0x60ff80); darkTarget = 1; sfx.play('charge', 0.9, 0.5); },
+      tick(c, k, t) { at(c, 0, 0, 0, c.att.pos); at(c, 1.6, 3 + smooth(k) * 4, 0, c.def.pos); if (frame % 2 === 0) beam(at(c, 1.6, 11, 0), at(c, 1.6, 0, 0), COL.psy, 1.2, 0.08);
+        for (let i = 0; i < 4; i++) if (t > 2.8 + i * 0.3 && cineOnce(c, 'e' + i)) { spawnFlash(c.def.chest(), COL.psy, 4, 0.15, TEX.star_06); sparks(c.def.chest(), COL.psy, 30, 12, 0.5, 0.3); cineHit(c, 3.5, { color: COL.psy, anim: false }); sfx.play('explode', 0.6, 1.2); } },
+      cam: (c, k) => camFrom(c, k, [-2.0, 0.3, 3.5], [-2.5, 0.2, 4.5], [1.4, 3.5], [1.6, 7], 56) },
+    { to: 6.2, enter(c) { c.def.anim.play('knockdown', { loop: false, fade: 0.05, start: 0, speed: 1.4 }); sfx.whoosh(true); },
+      tick(c, k, t) {
+        const kk = seg(t, 4.0, 4.5); at(c, 1.6, lerp(7, 0, kk * kk), 0, c.def.pos); at(c, 0, 0, 0, c.att.pos);
+        if (kk >= 1 && cineOnce(c, 'crash')) { const p = c.def.pos.clone(); groundBlast(p, COL.psy, 6, { shake: 1 }); firePillar(p, 2, 12, 1.2, vec3c(COL.psy)); if (c.ufo) c.ufo.fade = true; finishCine(c); }
+      },
+      cam: (c, k) => camFrom(c, k, [-1.5, 1.0, 5.5], [-3, 2.0, 8], [1.6, 3], [1.8, 1], 52) },
+  ] });
+
+// =====================================================================
+//  7) 저거넛
+// =====================================================================
+const SK_JG_CHARGE = dashSkill({ name: '파성 돌격', desc: '맞아도 멈추지 않고 들이받는 돌진', cd: 5, color: COL.blood, windup: 0.3, dur: 0.5, speed: 11, armor: true,
+  windClip: 'roar', windStart: 0.6, windSpeed: 2, clip: 'run', clipSpeed: 1.7, loop: true, sys: 'dust', reach: 1.4, width: 1.0, trail: false,
+  sound: () => sfx.roar(), tick: (f) => { if (frame % 3 === 0) { dust(f.pos, 2, 1, 2); shake = Math.max(shake, 0.08); } },
+  hit: { dmg: 15, chip: 5, hitstun: 0.7, knock: 9, launch: 5, knockdown: true, heavy: true, guardBreak: true, fxColor: COL.blood } });
+const SK_JG_STOMP = slamSkill({ name: '지진 발구르기', desc: '땅을 내리쳐 넓은 범위에 바위 가시', cd: 6, color: COL.magma, r: 3.6, impactT: 0.55, offset: 0.3,
+  hit: { dmg: 13, chip: 3, hitstun: 0.7, blockstun: 0.3, knock: 4, launch: 6.5, knockdown: true, heavy: true, fxColor: COL.magma },
+  fx: (p) => { for (let i = 0; i < 12; i++) { const a = i / 12 * Math.PI * 2; rockSpike(new V3(p.x + Math.cos(a) * 2.4, 0, p.z + Math.sin(a) * 2.4), vrand(1.2, 1.9), { delay: 0.02 * i, life: 0.9, tilt: 0.45, dir: new V3(Math.cos(a), 0, Math.sin(a)) }); } sfx.rumble(); } });
+const SK_JG_ROCK = shootSkill({ name: '바위 던지기', desc: '거대한 바위를 뽑아 던진다', cd: 5, color: COL.magma, clip: 'slam', clipStart: 0.3, clipSpeed: 1.6, castT: 0.45, count: 1, speed: 13, lob: true, from: 'high',
+  cfg: { look: 'rock', color: COL.magma, size: 0.55, gravity: 10, life: 3, trail: 'dust', trailN: 1, trailColor: COL.dust, hitR: 1.0,
+    hit: { dmg: 16, chip: 5, hitstun: 0.7, blockstun: 0.35, knock: 6, launch: 5, knockdown: true, heavy: true, fxColor: COL.magma },
+    aoe: { r: 1.8, hit: { dmg: 9, chip: 3, hitstun: 0.5, knock: 3, launch: 3 } },
+    explode: (p) => { groundBlast(p, COL.magma, 2.2); debris(p, 20, 8); sfx.crack(); sfx.boom(); } },
+  sound: () => { sfx.crack(); sfx.roar(); } });
+const ULT_JUGG = mkUlt({ name: '파멸의 맹공', desc: '붙잡아 바닥에 세 번 내리꽂고 대지를 무너뜨린다', dmg: 44, dur: 6.0, color: COL.blood, introClip: 'roar', introStart: 0.5, introSpeed: 1.1,
+  introSfx: () => { sfx.roar(); sfx.rumble(); },
+  segs: [
+    { to: 3.4, enter(c) {}, tick(c, k, t) {
+        at(c, 0, 0, 0, c.att.pos);
+        for (let i = 0; i < 3; i++) {
+          const t0 = 1.1 + i * 0.75;
+          if (t > t0 && cineOnce(c, 'lift' + i)) { const ci = CI.slam; c.att.anim.play('slam', { loop: false, fade: 0.06, start: Math.max(0, ci.tMin - 0.6), speed: 1.3 }); c.def.anim.play('falling', { loop: true, fade: 0.05 }); }
+          if (t > t0 + 0.45 && cineOnce(c, 'pound' + i)) { const p = at(c, 1.3, 0, 0); groundBlast(p, COL.magma, 2.5 + i * 0.6, { shake: 0.5 + i * 0.15 }); sfx.slam(); sfx.crack(); cineHit(c, 6, { heavy: true, anim: false, color: COL.blood }); c.def.anim.play('knockdown', { loop: false, fade: 0.03, start: CI.knockdown.lying - 0.1, speed: 1 }); }
+        }
+        const ph = ((t - 1.1) % 0.75) / 0.75; at(c, 1.3, t > 1.1 && t < 3.35 ? Math.sin(Math.min(1, ph / 0.6) * Math.PI) * 2.2 : 0, 0, c.def.pos);
+      },
+      cam: (c, k) => camOrbit(c, k, { r: 4.2, h: 1.6, a0: 0.8, a1: 1.6, lf: 0.8, lu: 1.0, fov: 48 }) },
+    { to: 4.4, enter(c) { moveAnim(c.att, 'uppercut', 0.9); c.def.anim.play('falling', { loop: true, fade: 0.1 }); },
+      tick(c, k, t) { at(c, 0, 0, 0, c.att.pos); at(c, 1.3, smooth(k) * 6, 0, c.def.pos); if (t > 3.6 && cineOnce(c, 'toss')) { cineHit(c, 5, { heavy: true, anim: false }); sfx.roar(); } },
+      cam: (c, k) => camFrom(c, k, [-1.5, 0.3, 3.0], [-1.8, 0.4, 4.0], [0.8, 1.6], [1.2, 5], 52) },
+    { to: 6.0, enter(c) { const ci = CI.slam, t0 = Math.max(0, ci.tMin - 0.9); c.att.anim.play('slam', { loop: false, fade: 0.08, start: t0, speed: (ci.tMin - t0) / 0.6 }); darkTarget = 0.8; },
+      tick(c, k, t) {
+        const kk = seg(t, 4.4, 5.0); at(c, lerp(0, 1.0, kk), Math.sin(kk * Math.PI) * 5, 0, c.att.pos); at(c, 1.3, lerp(6, 0, smooth(kk)), 0, c.def.pos);
+        if (kk >= 1 && cineOnce(c, 'quake')) {
+          const p = c.def.pos.clone(); groundBlast(p, COL.magma, 7, { shake: 1 }); firePillar(p, 1.8, 10, 1.3, vec3c(COL.magma));
+          for (let i = 0; i < 16; i++) { const a = i / 16 * Math.PI * 2; rockSpike(new V3(p.x + Math.cos(a) * 3, 0, p.z + Math.sin(a) * 3), vrand(1.8, 2.8), { delay: 0.01 * i, life: 1.4, tilt: 0.5, dir: new V3(Math.cos(a), 0, Math.sin(a)) }); }
+          finishCine(c);
+        }
+      },
+      cam: (c, k) => camFrom(c, k, [-2.5, 1.5, 4.5], [-4, 3, 7.5], [1.2, 2.5], [1.3, 0.8], 52) },
+  ] });
+
+// =====================================================================
+//  8) 곤충형 괴물
+// =====================================================================
+const SK_IN_NEEDLE = shootSkill({ name: '독침 연사', desc: '부채꼴로 독침 세 발', cd: 2.5, air: true, color: COL.toxic, clip: 'jab', clipMul: 0.8, castT: 0.18, count: 3, gap: 0.0, spread: 0.22, speed: 20, from: 'chest',
+  cfg: { look: 'orb', color: COL.toxic, size: 0.14, life: 1.2, trail: 'spark', trailN: 1, trailLife: 0.15, hitR: 0.6,
+    hit: { dmg: 5, chip: 1, hitstun: 0.32, blockstun: 0.12, knock: 1.6, fxColor: COL.toxic } },
+  sound: () => sfx.play('swing', 0.5, 1.8) });
+const SK_IN_POUNCE = {   // 도약 급습 : 상대 위치로 뛰어올라 덮친다
+  name: '도약 급습', desc: '높이 뛰어올라 상대를 덮친다', cd: 5, air: false,
+  start(f, opp, sk) {
+    const tgt = opp.pos.clone().addScaledVector(opp.vel, 0.25); tgt.y = 0; sk.tgt = tgt;
+    const d = tgt.clone().sub(f.pos); d.y = 0; sk.T = 0.6; f.vel.set(d.x / sk.T, 9, d.z / sk.T); f.pos.y = 0.02; f.noGrav = false;
+    f.anim.play('jump', { loop: false, fade: 0.06, start: Math.max(0, CI.jump.takeoff - 0.05), speed: 1.4 }); dust(f.pos, 8, 1.1); sfx.whoosh(true); sfx.play('monster', 0.5, 1.5);
+    decal(tgt, TEX.circle_03, 2.6, 0.7, { color: 0xb0ff30, additive: true, grow: -0.4 });
+  },
+  update(f, opp, sk) {
+    f.vel.y = 9 - f.t * 30;
+    if (frame % 2 === 0) spawnGhost(f);
+    if (f.t > 0.25 && once(sk, 'dive')) moveAnim(f, 'kick', 1.0);
+    if ((f.t > 0.2 && !f.airborne) || f.t > 0.9) {
+      if (once(sk, 'land')) {
+        f.vel.set(0, 0, 0); f.pos.y = 0; groundBlast(f.pos.clone(), COL.toxic, 2.4); sfx.slam();
+        aoeHit(f, f.pos, 1.9, { dmg: 14, chip: 4, hitstun: 0.7, blockstun: 0.3, knock: 5, launch: 6, knockdown: true, heavy: true, fxColor: COL.toxic });
+        sk.lt = f.t;
+      }
+      if (f.t > sk.lt + 0.45) f.toNeutral();
+    }
+  },
+};
+const SK_IN_WEB = shootSkill({ name: '거미줄 고치', desc: '맞으면 잠시 꼼짝 못 하는 거미줄', cd: 6, color: COL.web, clip: 'fireball', castT: 0.3, count: 1, speed: 12,
+  cfg: { look: 'web', color: COL.web, size: 0.45, life: 1.6, trail: 'smoke', trailN: 1, trailColor: COL.dust, hitR: 0.8,
+    onHitDef: (pr, def, p) => {
+      if (!applyHit(pr.owner, def, { dmg: 6, chip: 2, hitstun: 1.3, blockstun: 0.3, knock: 0.3, fxColor: COL.web }, p)) return false;
+      if (def.state === 'hitstun') {
+        def.anim.play('stagger', { loop: true, fade: 0.1, speed: 0.4 });
+        const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: TEX.symbol_02, color: 0x999990, transparent: true, depthWrite: false }));
+        addTransient(s, 1.3, k => { s.position.copy(def.chest()); s.scale.setScalar(2.4); s.material.opacity = Math.min(1, k * 3) * 0.85; s.material.rotation += 0.02; });
+      }
+      return true;
+    } },
+  sound: () => sfx.play('monster', 0.4, 2) });
+const ULT_INSECT = mkUlt({ name: '벌레 떼', desc: '발톱 난타 후 벌레 떼로 뒤덮고 덮쳐 끝낸다', dmg: 40, dur: 6.0, color: COL.toxic, introClip: 'roar', introStart: 0.5, introSpeed: 1.4,
+  introSfx: () => { sfx.ult(); sfx.play('monster', 0.9, 1.5); },
+  segs: [
+    { to: 2.6, enter(c) {}, tick(c, k, t) {
+        at(c, 0, 0, 0, c.att.pos); at(c, 1.3, 0, 0, c.def.pos);
+        cineStrikes(c, t, [[1.1, 'jab', 3, false], [1.3, 'cross', 3, false], [1.5, 'jab', 3, false], [1.7, 'cross', 3, false], [1.95, 'uppercut', 3, false], [2.3, 'spin_back', 4, true]], COL.toxic);
+        if (frame % 3 === 0) slashFx(c.def.chest(), _v1.set(vrand(-1, 1), vrand(-1, 1), vrand(-1, 1)).normalize(), COL.toxic, 2, 0.2, 0.2);
+      },
+      cam: (c, k) => camOrbit(c, k, { r: 2.8, h: 1.3, a0: 0.5, a1: 1.5, lf: 0.6, lu: 1.2, fov: 44 }) },
+    { to: 4.3, enter(c) { c.att.anim.play('roar', { loop: false, fade: 0.1, start: 0.5, speed: 1 }); c.def.anim.play('stagger', { loop: true, fade: 0.1 }); darkTarget = 0.8; sfx.play('monster', 0.8, 1.8); },
+      tick(c, k, t) {
+        at(c, -0.3, 0, 0, c.att.pos); at(c, 1.8, 0, 0, c.def.pos);
+        const dc = c.def.chest();
+        for (let i = 0; i < 6; i++) { const a = vrand(0, 6.28), r = vrand(0.4, 1.6); P.dirt.spawn(_v1.set(dc.x + Math.cos(a) * r, dc.y + vrand(-1, 1), dc.z + Math.sin(a) * r), _v2.set(-Math.sin(a) * 6, vrand(-1, 1), Math.cos(a) * 6), COL.dirt, 0.4, 0.12, 0.08, 0.95, 0, 10); }
+        if (frame % 4 === 0) sparks(dc, COL.toxic, 4, 5, 0.25, 0.15);
+        for (let i = 0; i < 6; i++) if (t > 2.8 + i * 0.22 && cineOnce(c, 'sw' + i)) cineHit(c, 2.5, { color: COL.toxic, stop: 0.02 });
+      },
+      cam: (c, k) => camOrbit(c, k, { r: 3.2, h: 1.1, a0: 1.2, a1: 2.2, lf: 1.4, lu: 1.3, fov: 46 }) },
+    { to: 6.0, enter(c) { c.att.anim.play('jump', { loop: false, fade: 0.05, start: Math.max(0, CI.jump.takeoff - 0.05), speed: 1.2 }); sfx.whoosh(true); },
+      tick(c, k, t) {
+        const kk = seg(t, 4.3, 5.0); at(c, lerp(-0.3, 1.5, kk), Math.sin(kk * Math.PI) * 5, 0, c.att.pos); at(c, 1.8, 0, 0, c.def.pos);
+        if (kk > 0.5 && cineOnce(c, 'divek')) moveAnim(c.att, 'kick', 1);
+        if (kk >= 1 && cineOnce(c, 'impact')) { const p = c.def.pos.clone(); groundBlast(p, COL.toxic, 6, { shake: 1 }); firePillar(p, 1.6, 9, 1.2, vec3c(COL.toxic)); fireBurst(p, 30, 1.4, COL.toxic); finishCine(c); }
+      },
+      cam: (c, k) => camFrom(c, k, [-2.0, 1.0, 4.5], [-3.5, 2.5, 7.0], [0.8, 3.0], [1.6, 1.0], 52) },
+  ] });
+
+// =====================================================================
+//  캐릭터 목록 · 불러오기 · 선택 화면
+// =====================================================================
+let RIG_SRC = null, CLIPS = null;   // Mixamo 기준 뼈대(뮤턴트 원본) · 공용 애니메이션
+const CHAR_BY_ID = {};
+function defineChars(list) { for (const d of list) CHAR_BY_ID[d.id] = d; return list; }
+
+const ASSET = {};
+function loadCharAsset(def) {
+  if (!ASSET[def.id]) ASSET[def.id] = (async () => {
+    let obj, anims = [];
+    if (def.src.endsWith('.fbx')) { obj = await fbxLoader.loadAsync(def.src); anims = obj.animations || []; }
+    else { const g = await gltfLoader.loadAsync(def.src); obj = g.scene; anims = g.animations || []; }
+    obj.updateMatrixWorld(true);
+    if (def.pose === 'bind') { const sk = new Set(); obj.traverse(o => { if (o.isSkinnedMesh) sk.add(o.skeleton); }); sk.forEach(s => s.pose()); }
+    else if (def.pose && def.pose.startsWith('clip:')) { const clip = anims.find(a => a.name.includes(def.pose.slice(5))); if (clip) applyClipPose(obj, clip); }
+    if (def.rig === 'dragon') cleanDragon(obj);
+    obj.traverse(o => { if (o.isMesh && def.hideMesh && def.hideMesh.test(o.name)) o.visible = false; });
+    if (def.prep) def.prep(obj);
+    obj.updateMatrixWorld(true);
+    return obj;
+  })().catch(e => { delete ASSET[def.id]; throw e; });
+  return ASSET[def.id];
+}
+function shareSkeletons(model) {   // 같은 뼈대를 쓰는 부품들이 뼈 계산을 한 번만 하도록
+  let base = null;
+  model.traverse(o => {
+    if (!o.isSkinnedMesh) return;
+    if (!base) { base = o.skeleton; return; }
+    const b = o.skeleton.bones, inv = o.skeleton.boneInverses, inv0 = base.boneInverses;
+    if (b.length === base.bones.length && b.every((x, i) => x === base.bones[i]) && inv.every((m, i) => m.elements.every((e, j) => Math.abs(e - inv0[i].elements[j]) < 1e-4))) o.skeleton = base;
+  });
+}
+function applyClipPose(root, clip) {   // 애니메이션 첫 프레임 자세를 기본 자세로
+  for (const tr of clip.tracks) {
+    const pb = THREE.PropertyBinding.parseTrackName(tr.name), node = THREE.PropertyBinding.findNode(root, pb.nodeName);
+    if (!node || !node[pb.propertyName] || !node[pb.propertyName].fromArray) continue;
+    node[pb.propertyName].fromArray(tr.values, 0);
+  }
+  root.updateMatrixWorld(true);
+}
+const SKIN_GVP = Object.prototype.hasOwnProperty.call(THREE.SkinnedMesh.prototype, 'getVertexPosition');   // 스키닝 적용까지 해 주는 버전인지
+function visibleBox(model) {   // 보이는 메시의 (스키닝 적용된) 정점으로 크기 측정 — 동떨어진 점은 무시
+  model.updateMatrixWorld(true);
+  const ys = [], v = new V3();
+  model.traverse(o => {
+    if (!o.isMesh) return;
+    let p = o; while (p) { if (!p.visible) return; p = p.parent; }
+    const n = o.geometry.attributes.position.count, stepN = Math.max(1, Math.ceil(n / 3000));
+    for (let i = 0; i < n; i += stepN) { o.getVertexPosition(i, v); if (o.isSkinnedMesh && !SKIN_GVP) o.applyBoneTransform(i, v); v.applyMatrix4(o.matrixWorld); ys.push(v.y); }
+  });
+  ys.sort((a, b) => a - b);
+  const lo = ys[Math.floor(ys.length * 0.003)] ?? 0, hi = ys[Math.min(ys.length - 1, Math.ceil(ys.length * 0.997))] ?? 1;
+  return { min: { y: lo }, max: { y: hi } };
+}
+function buildFighter(def, asset) {
+  const model = SkeletonUtils.clone(asset);
+  if (def.yaw) model.rotation.y = def.yaw;
+  if (def.modelScale) model.scale.multiplyScalar(def.modelScale);
+  model.updateMatrixWorld(true);
+  const mats = prepModel(model);
+  shareSkeletons(model);
+  let maxV = 0; model.traverse(o => { if (o.isMesh && o.visible) maxV = Math.max(maxV, o.geometry.attributes.position.count); });
+  model.traverse(o => { if (o.isMesh) o.castShadow = o.visible && o.geometry.attributes.position.count >= Math.min(4000, maxV * 0.3); });
+  const byBase = {}; model.traverse(o => { if (o.isBone) byBase[baseName(o.name)] = o; });
+  let rig;
+  if (def.rig === 'mixamo') rig = new DirectRig(model);
+  else {
+    let map;
+    if (def.rig === 'dragon') map = Object.fromEntries(Object.entries(DRAGON_MAP).map(([k, v]) => [k, byBase[v]]));
+    else if (def.rig === 'map') map = Object.fromEntries(Object.entries(BONEMAPS[def.id]).map(([k, v]) => [k, byBase[v]]));
+    else map = autoBoneMap(model);
+    for (const k in map) if (!map[k]) delete map[k];
+    const follow = (BONEFOLLOW[def.id] || []).map(([a, b, rot]) => [byBase[a], byBase[b], rot]).filter(x => x[0] && x[1]);
+    const box0 = visibleBox(model);
+    rig = new RetargetRig(model, map, RIG_SRC, { floorY: box0.min.y, follow, wings: def.wings ? ['L', 'R'].map(s => byBase['WingShoulder' + s]).filter(Boolean) : [] });
+  }
+  model.updateMatrixWorld(true);
+  const box = visibleBox(model);
+  const headY = rig.bone('Head') ? wpos(rig.bone('Head')).y : box.max.y * 0.92;
+  const hipsP = rig.bone('Hips') ? wpos(rig.bone('Hips')) : new V3();
+  const scale = def.height / Math.max(0.01, (Math.min(headY, box.max.y) - box.min.y) * 1.1);
+  const f = new Fighter({ def, id: def.id, name: def.name, color: new THREE.Color(...def.color), model, rig, clips: CLIPS, mats, height: def.height,
+    victoryClip: def.victory || 'victory', skills: def.skills(), ult: def.ult(), wings: !!def.wings, voice: def.voice || 'mech' });
+  f.holder.scale.setScalar(scale); f.holder.position.set(-hipsP.x * scale, -box.min.y * scale, -hipsP.z * scale);
+  if (def.ghosts) makeGhosts(f, 5);
+  return f;
+}
+async function loadFighters(ids, onText) {
+  const defs = ids.map(id => CHAR_BY_ID[id]);
+  if (onText) onText('캐릭터 불러오는 중...');
+  const assets = await Promise.all(defs.map(loadCharAsset));
+  for (const f of G.f) f.dispose();
+  G.f = defs.map((d, i) => buildFighter(d, assets[i]));
+  G.charIds = ids.slice();
+  G.f.forEach((f, i) => { $('n' + (i + 1)).textContent = f.name; buildSkillHud(f, i + 1, KEY_LABEL[i ? 'p2' : 'p1']); });
+  HC.clear();
+  const sc = innerHeight * 0.9 * renderer.getPixelRatio(); for (const k in P) P[k].mat.uniforms.uScale.value = sc;
+  G.f[0].reset(-2.6); G.f[1].reset(2.6);
+  renderer.shadowMap.needsUpdate = true; renderer.compile(scene, camera);
+}
+
+// ---------------- 선택 화면 ----------------
+const SEL = {
+  open: false, mode: 'local', cur: [0, 1], lock: [false, false], me: 0, busy: false, peer: null,
+  build() {
+    if (this.built) return; this.built = true;
+    const g = $('selGrid'); g.innerHTML = '';
+    CHARS.forEach((d, i) => {
+      const el = document.createElement('div'); el.className = 'selCard'; el.dataset.i = i;
+      el.innerHTML = `<img src="assets/portraits/${d.id}.jpg" alt=""><b>${d.name}</b><i class="c1">1P</i><i class="c2">2P</i>`;
+      el.style.setProperty('--cc', '#' + new THREE.Color(...d.color).getHexString());
+      el.addEventListener('mouseenter', () => { if (!this.open) return; const s = this.mouseSlot(); if (s >= 0 && !this.lock[s]) { this.cur[s] = i; this.render(); } });
+      el.addEventListener('click', () => { if (!this.open) return; const s = this.mouseSlot(); if (s >= 0) { this.cur[s] = i; this.confirm(s); } });
+      g.appendChild(el);
+    });
+  },
+  mouseSlot() { if (this.mode === 'online') return this.lock[this.me] ? -1 : this.me; return !this.lock[0] ? 0 : !this.lock[1] ? 1 : -1; },
+  show(mode, me = 0) {
+    this.build(); this.mode = mode; this.me = me; this.open = true; this.busy = false; this.peer = null;
+    this.lock = [false, false];
+    if (G.charIds) this.cur = G.charIds.map(id => Math.max(0, CHARS.findIndex(d => d.id === id)));
+    G.phase = 'select'; G.phaseT = 0;
+    $('title').classList.add('hidden'); $('hud').classList.add('hidden'); $('matchend').classList.add('hidden');
+    $('select').classList.remove('hidden'); $('select').classList.toggle('online', mode === 'online');
+    $('selHelp').innerHTML = mode === 'online'
+      ? '방향키 또는 A/D/W/S 이동 · <b>E</b> 또는 <b>8</b> 또는 클릭으로 선택 · ESC 나가기'
+      : '<span class="h1">1P</span> A/D/W/S 이동 · <b>E</b> 선택 · Tab 취소 &nbsp;&nbsp; <span class="h2">2P</span> 방향키 이동 · <b>8</b> 선택 · 7 취소 &nbsp;&nbsp; 마우스 클릭도 돼요 · ESC 뒤로';
+    $('selStatus').textContent = '';
+    this.render();
+  },
+  hide() { this.open = false; $('select').classList.add('hidden'); },
+  move(s, dx, dy) {
+    if (this.lock[s] || this.busy) return;
+    const cols = 5, n = CHARS.length; let i = this.cur[s];
+    if (dx) i = (i + dx + n) % n;
+    if (dy) { i += dy * cols; if (i < 0) i += Math.ceil(n / cols) * cols; if (i >= n) i = i % cols; i = Math.min(i, n - 1); }
+    this.cur[s] = i; sfx.play('swing', 0.25, 1.6); this.render();
+  },
+  confirm(s) {
+    if (this.lock[s] || this.busy) return;
+    this.lock[s] = true; sfx.play('hit', 0.5, 1.3); sfx.whoosh(true); this.render();
+    if (this.mode === 'online') { NET.sendR({ k: 'pick', id: CHARS[this.cur[s]].id }); $('selStatus').textContent = '상대가 고르는 중...'; NET.onPick(); return; }
+    if (this.lock[0] && this.lock[1]) this.go();
+  },
+  cancel(s) { if (this.busy || !this.lock[s] || this.mode === 'online') return; this.lock[s] = false; this.render(); },
+  async go() {
+    this.busy = true; $('selStatus').textContent = '캐릭터 불러오는 중...';
+    try { await loadFighters(this.cur.map(i => CHARS[i].id)); }
+    catch (e) { console.error(e); $('selStatus').textContent = '불러오기 실패 : ' + e.message; this.busy = false; this.lock = [false, false]; this.render(); return; }
+    this.hide(); G.startMatch();
+  },
+  key(c) {
+    if (c === 'Escape') { if (this.mode === 'online') { NET.leave(); G.goTitle(); return; } if (this.lock[0] || this.lock[1]) { this.lock = [false, false]; this.render(); } else G.goTitle(); return; }
+    if (this.mode === 'online') {
+      const s = this.me;
+      if (c === 'KeyA' || c === 'ArrowLeft') this.move(s, -1, 0); else if (c === 'KeyD' || c === 'ArrowRight') this.move(s, 1, 0);
+      else if (c === 'KeyW' || c === 'ArrowUp') this.move(s, 0, -1); else if (c === 'KeyS' || c === 'ArrowDown') this.move(s, 0, 1);
+      else if (['KeyE', 'Digit8', 'Numpad8', 'Enter', 'NumpadEnter', 'Space'].includes(c)) this.confirm(s);
+      return;
+    }
+    if (c === 'KeyA') this.move(0, -1, 0); else if (c === 'KeyD') this.move(0, 1, 0); else if (c === 'KeyW') this.move(0, 0, -1); else if (c === 'KeyS') this.move(0, 0, 1);
+    else if (c === 'KeyE' || c === 'Space') this.confirm(0); else if (c === 'Tab') this.cancel(0);
+    else if (c === 'ArrowLeft') this.move(1, -1, 0); else if (c === 'ArrowRight') this.move(1, 1, 0); else if (c === 'ArrowUp') this.move(1, 0, -1); else if (c === 'ArrowDown') this.move(1, 0, 1);
+    else if (c === 'Digit8' || c === 'Numpad8' || c === 'Enter' || c === 'NumpadEnter') this.confirm(1); else if (c === 'Digit7' || c === 'Numpad7') this.cancel(1);
+  },
+  render() {
+    const cards = [...$('selGrid').children];
+    cards.forEach((el, i) => {
+      el.classList.toggle('p1', this.cur[0] === i && (this.mode === 'local' || this.me === 0 || this.lock[0]));
+      el.classList.toggle('p2', this.cur[1] === i && (this.mode === 'local' || this.me === 1 || this.lock[1]));
+      el.classList.toggle('l1', this.cur[0] === i && this.lock[0]); el.classList.toggle('l2', this.cur[1] === i && this.lock[1]);
+    });
+    for (let s = 0; s < 2; s++) {
+      const box = $('sel' + (s + 1));
+      const hidden = this.mode === 'online' && s !== this.me && !this.lock[s];
+      if (hidden) { box.innerHTML = `<div class="who">${s ? '2P' : '1P'} · 상대</div><div class="nm">고르는 중...</div>`; continue; }
+      const d = CHARS[this.cur[s]], keys = KEY_LABEL[s ? 'p2' : 'p1'];
+      const sk = d.skills(), ul = d.ult();
+      box.innerHTML = `<div class="who">${s ? '2P' : '1P'}${this.mode === 'online' && s === this.me ? ' · 나' : ''}${this.lock[s] ? ' · <b>결정!</b>' : ''}</div>
+        <img src="assets/portraits/${d.id}.jpg" alt=""><div class="nm" style="color:#${new THREE.Color(...d.color).getHexString()}">${d.name}</div><div class="tag">${d.tag || ''}</div>
+        <ul>${sk.map((x, k) => `<li><b>${this.mode === 'online' ? ['R', 'F', 'Q'][k] : keys[k]}</b>${x.name}<small>${x.desc || ''}</small></li>`).join('')}
+        <li class="u"><b>${this.mode === 'online' ? 'T' : keys[3]}</b>${ul.name}<small>궁극기 · ${ul.desc || ''}</small></li></ul>`;
+    }
+  },
+};
+
+// =====================================================================
+//  캐릭터 목록 (선택 화면 순서)
+// =====================================================================
+const CHARS = defineChars([
+  { id: 'dragon', name: '드래곤 워리어', tag: '날개 달린 강화복 용전사', src: 'assets/characters/dragon_warrior/dragon_warrior.glb', rig: 'dragon', height: 2.05, color: [1, 0.42, 0.12],
+    victory: 'victory', voice: 'mech', wings: true, skills: () => [SK_PLASMA, SK_BREATH, SK_DIVE], ult: () => ULT_DRAGON },
+  { id: 'mutant', name: '뮤턴트', tag: '땅을 부수는 괴력의 돌연변이', src: 'assets/characters/mutant/mutant.fbx', rig: 'mixamo', height: 2.15, color: [0.18, 0.84, 1],
+    victory: 'roar', voice: 'beast', ghosts: true, skills: () => [SK_SPIN, SK_QUAKE, SK_BURROW], ult: () => ULT_MUTANT },
+  { id: 'samurai', name: '흑염 사무라이', tag: '보라 불꽃의 그림자 검객', src: 'assets/characters/samurai/samurai.glb', rig: 'map', height: 1.95, color: [0.72, 0.4, 1],
+    victory: 'taunt', voice: 'mech', ghosts: true, skills: () => [SK_SAM_IAI, SK_SAM_SHADOW, SK_SAM_VORTEX], ult: () => ULT_SAMURAI },
+  { id: 'knight', name: '중갑 기사', tag: '방패와 성검의 수호자', src: 'assets/characters/knight/knight.glb', rig: 'map', height: 2.0, color: [1, 0.8, 0.3],
+    victory: 'flex', voice: 'mech', skills: () => [SK_KN_BASH, SK_KN_SMITE, SK_KN_COUNTER], ult: () => ULT_KNIGHT },
+  { id: 'officer', name: 'SF 장교', tag: '플라즈마 총의 전술 장교', src: 'assets/characters/officer/officer.glb', rig: 'map', pose: 'clip:T-Pose', height: 1.9, color: [0.3, 1, 0.9],
+    victory: 'taunt', voice: 'mech', skills: () => [SK_OF_BURST, SK_OF_GRENADE, SK_OF_BATON], ult: () => ULT_OFFICER },
+  { id: 'mecha', name: '메카 전사', tag: '미사일과 부스터의 강철 거인', src: 'assets/characters/mecha/mecha.glb', rig: 'map', height: 2.3, color: [1, 0.6, 0.2],
+    victory: 'flex', voice: 'mech', skills: () => [SK_ME_ROCKET, SK_ME_MISSILES, SK_ME_KNEE], ult: () => ULT_MECHA },
+  { id: 'sorceress', name: '용족 마법사', tag: '마법진을 다루는 용의 후예', src: 'assets/characters/sorceress/sorceress.glb', rig: 'map', pose: 'bind', height: 2.0, color: [1, 0.35, 0.85],
+    victory: 'taunt', voice: 'mech', skills: () => [SK_SO_ORB, SK_SO_BLINK, SK_SO_RUNE], ult: () => ULT_SORCERESS },
+  { id: 'alien', name: '외계인', tag: '염동력과 산성의 침략자', src: 'assets/characters/alien/alien.glb', rig: 'map', height: 1.85, color: [0.4, 1, 0.5],
+    victory: 'taunt', voice: 'beast', skills: () => [SK_AL_ACID, SK_AL_TK, SK_AL_WELL], ult: () => ULT_ALIEN },
+  { id: 'juggernaut', name: '저거넛', tag: '모든 것을 부수는 거대 괴수', src: 'assets/characters/juggernaut/juggernaut.glb', rig: 'map', height: 2.5, color: [1, 0.3, 0.2],
+    victory: 'roar', voice: 'beast', skills: () => [SK_JG_CHARGE, SK_JG_STOMP, SK_JG_ROCK], ult: () => ULT_JUGG },
+  { id: 'insect', name: '곤충형 괴물', tag: '독침과 거미줄의 사냥꾼', src: 'assets/characters/insect/insect.glb', rig: 'map', pose: 'bind', height: 2.0, color: [0.75, 1, 0.2],
+    victory: 'roar', voice: 'beast', ghosts: true, skills: () => [SK_IN_NEEDLE, SK_IN_POUNCE, SK_IN_WEB], ult: () => ULT_INSECT },
+]);
+for (const d of CHARS) { const u = d.ult(); if (!u.desc) u.desc = ({ dragon: '하늘로 끌고 올라가 운석을 퍼붓는다', mutant: '연타 · 내려찍기 후 용암 분출' })[d.id] || ''; }
+Object.assign(SK_PLASMA, { desc: '에너지탄 (공중이면 아래로 사선)' }); Object.assign(SK_BREATH, { desc: '화염 방사, 고개를 돌려 쓸어버림' }); Object.assign(SK_DIVE, { desc: '날아올라 불꽃 다이브' });
+Object.assign(SK_SPIN, { desc: '막기를 부수며 추적 돌진' }); Object.assign(SK_QUAKE, { desc: '바위 가시를 일직선으로' }); Object.assign(SK_BURROW, { desc: '땅속으로 파고들어 발밑에서 분출' });
+
 function updateCine(dt) { cine.t += dt; cine.script.update(cine, cine.t); if (cine.t >= cine.script.dur) endCine(); }
 
 // =====================================================================
@@ -1512,20 +2590,22 @@ const G = {
   menuKey(c) {
     if (this.phase === 'loading') return;
     if (NET.menuOpen) { NET.menuKey(c); return; }
-    if (c === 'Escape') { if (NET.active) NET.leave(); this.goTitle(); return; }
+    if (c === 'Escape' && this.phase !== 'select') { if (NET.active) NET.leave(); this.goTitle(); return; }
     if (NET.active) return;   // 온라인 대전 중엔 일시정지 · 다시하기 키를 쓰지 않음 (재대결은 입력으로 처리)
+    if (this.phase === 'select') { SEL.key(c); return; }
     if (c === 'KeyO' && this.phase === 'title') { NET.openMenu(); return; }
-    if ((c === 'Enter' || c === 'NumpadEnter') && this.phase === 'title') this.startMatch();
+    if ((c === 'Enter' || c === 'NumpadEnter') && this.phase === 'title') SEL.show('local');
     else if (c === 'KeyR' && this.phase === 'matchend') this.startMatch();
+    else if (c === 'KeyC' && this.phase === 'matchend') SEL.show('local');
     else if (c === 'KeyP' && this.phase === 'fight') { this.paused = !this.paused; $('pause').classList.toggle('hidden', !this.paused); }
   },
-  resetWorld() { clearProjectiles(); clearSpikes(); cine.active = false; darkTarget = 0; $('cutin').className = 'hidden'; $('hud').classList.remove('cine'); },
+  resetWorld() { clearProjectiles(); clearSpikes(); TIMERS.length = 0; cine.active = false; darkTarget = 0; $('cutin').className = 'hidden'; $('hud').classList.remove('cine'); },
   goTitle() {
     this.phase = 'title'; this.phaseT = 0; this.paused = false; this.resetWorld();
     for (const [i, f] of this.f.entries()) { f.wins = 0; f.reset(i ? 2.2 : -2.2); }
     clearAnnounce();
     $('title').classList.remove('hidden'); $('hud').classList.add('hidden'); $('pause').classList.add('hidden'); $('matchend').classList.add('hidden');
-    $('netHud').classList.add('hidden');
+    $('netHud').classList.add('hidden'); SEL.hide();
   },
   startMatch() { this.round = 1; for (const f of this.f) f.wins = 0; $('matchend').classList.add('hidden'); this.startRound(); },
   startRound() {
@@ -1569,7 +2649,7 @@ function step() {
   if (cine.active) {
     updateCine(SDT);
     for (const f of G.f) { f.comboTimer = Math.max(0, f.comboTimer - SDT); if (f.shownHp > f.hp) f.shownHp = Math.max(f.hp, f.shownHp - 30 * SDT); }
-  } else if (G.phase !== 'title') {
+  } else if (G.phase !== 'title' && G.phase !== 'select') {
     const i1 = fight ? inputFor(0) : NO_INPUT, i2 = fight ? inputFor(1) : NO_INPUT;
     for (const [f, inp, o] of [[a, i1, b], [b, i2, a]]) {
       if (f.state === 'ultStart') { f.t += SDT; updateUltStart(f, o); if (cine.active) break; f.pos.addScaledVector(f.vel, SDT); }
@@ -1578,7 +2658,7 @@ function step() {
     }
     if (!cine.active) separate(a, b);
   } else { for (const f of G.f) { f.faceOpp(G.opp(f), 6); f.anim.loco('idle', 1); } }
-  updateProjectiles(SDT);
+  updateProjectiles(SDT); updateTimers(SDT);
   if (NET.active) { for (const f of G.f) { f.updateVisual(SDT); f.group.updateMatrixWorld(true); } }   // 온라인 : 손·발 위치가 두 PC에서 같도록
   else for (const f of G.f) f.animAcc = (f.animAcc || 0) + SDT;
 
@@ -1598,9 +2678,9 @@ function step() {
       if (a.wins >= WINS_NEEDED || b.wins >= WINS_NEEDED) {
         G.phase = 'matchend'; clearAnnounce();
         const w = a.wins >= WINS_NEEDED ? a : b;
-        $('meText').textContent = (w === a ? 'P1 ' : 'P2 ') + w.name + ' 최종 승리!'; $('meScore').textContent = a.wins + '  :  ' + b.wins;
+        $('meText').textContent = (w === a ? '1P ' : '2P ') + w.name + ' 최종 승리!'; $('meScore').textContent = a.wins + '  :  ' + b.wins;
         $('matchend').classList.remove('hidden'); sfx.vo('you_win');
-        $('meHelp').textContent = NET.active ? 'R 재대결 (둘 다 눌러야 시작) · ESC 나가기' : 'R 다시하기 · ESC 타이틀로';
+        $('meHelp').textContent = NET.active ? 'R 재대결 (둘 다 눌러야 시작) · ESC 나가기' : 'R 다시하기 · C 캐릭터 다시 고르기 · ESC 타이틀로';
       } else { G.round++; G.startRound(); }
     }
   }
@@ -1633,7 +2713,7 @@ function buildSkillHud(f, n, keys) {
 const HC = new Map();   // HUD 캐시 : 값이 바뀔 때만 DOM을 건드림 (레이아웃 재계산 방지)
 const hset = (el, key, val, fn) => { const k = el.id + key; if (HC.get(k) === val) return; HC.set(k, val); fn(val); };
 function updateHud() {
-  if (G.phase === 'title' || G.phase === 'loading') return;
+  if (G.phase === 'title' || G.phase === 'loading' || G.phase === 'select') return;
   G.f.forEach((f, i) => {
     const n = i + 1, hp = $('hp' + n), lag = $('lag' + n), ult = $('ult' + n), c = $('combo' + n);
     hset(hp, 'w', Math.round(f.hp / MAX_HP * 1000) / 10, v => { hp.style.width = v + '%'; hp.classList.toggle('low', v <= 30); });
@@ -1653,9 +2733,8 @@ function updateHud() {
 // =====================================================================
 async function main() {
   const texPromises = TEX_NAMES.map(n => texLoader.loadAsync(`assets/fx/kenney/${n}.png`).then(t => { TEX[n] = t; }));
-  const [mapG, dragonG, mutantF, ...animF] = await Promise.all([
+  const [mapG, mutantF, ...animF] = await Promise.all([
     gltfLoader.loadAsync('assets/maps/lava_arena/lava_arena.glb'),
-    gltfLoader.loadAsync('assets/characters/dragon_warrior/dragon_warrior.glb'),
     fbxLoader.loadAsync('assets/characters/mutant/mutant.fbx'),
     ...ANIM_NAMES.map(n => fbxLoader.loadAsync(`assets/animations/${n}.fbx`)),
   ]);
@@ -1708,38 +2787,10 @@ async function main() {
   const clips = animF.map((f, i) => prepClip(f, ANIM_NAMES[i]));
   CI = analyzeClips(mutantF, clips); finalizeMoves();
 
-  // 캐릭터
-  const mutant = mutantF; const mutMats = prepModel(mutant); mutant.updateMatrixWorld(true);
-  const mHead = wpos(mutant.getObjectByName('mixamorigHead')).y, mBox = new THREE.Box3().setFromObject(mutant);
-  const mScale = 2.15 / ((mHead - mBox.min.y) * 1.1);
-  const dragon = dragonG.scene; const byBase = cleanDragon(dragon); const drgMats = prepModel(dragon); dragon.updateMatrixWorld(true);
-  dragon.traverse(o => { if (o.isMesh) o.castShadow = o.visible && o.geometry.attributes.position.count > 4000; });
-  let sharedSkel = null, shared = 0;
-  dragon.traverse(o => {
-    if (!o.isSkinnedMesh) return;
-    if (!sharedSkel) { sharedSkel = o.skeleton; return; }
-    const b = o.skeleton.bones;
-    const inv = o.skeleton.boneInverses, inv0 = sharedSkel.boneInverses;
-    const same = b.length === sharedSkel.bones.length && b.every((x, i) => x === sharedSkel.bones[i]) &&
-      inv.every((m, i) => m.elements.every((e, j) => Math.abs(e - inv0[i].elements[j]) < 1e-4));
-    if (same) { o.skeleton = sharedSkel; shared++; }
-  });
-  console.log('[격투왕] 드래곤 뼈대 공유', shared + 1, '개 부품');
-  const dHead = wpos(byBase['DEF-spine006']).y, dToe = wpos(byBase['DEF-r_toeL'] || byBase['DEF-footL']).y;
-  const dMinY = dToe - (dHead - dToe) * 0.05, dScale = 2.05 / ((dHead - dMinY) * 1.08);
-  const dragonRig = new RetargetRig(dragon, byBase, mutantF), mutantRig = new DirectRig(mutant);
-
-  const p1 = new Fighter({ name: '드래곤 워리어', color: new THREE.Color(1, 0.42, 0.12), model: dragon, rig: dragonRig, clips, mats: drgMats, height: 2.05,
-    victoryClip: 'victory', skills: [SK_PLASMA, SK_BREATH, SK_DIVE], ult: ULT_DRAGON, wings: true, voice: 'mech' });
-  p1.holder.scale.setScalar(dScale); p1.holder.position.y = -dMinY * dScale;
-  const p2 = new Fighter({ name: '뮤턴트', color: new THREE.Color(0.18, 0.84, 1), model: mutant, rig: mutantRig, clips, mats: mutMats, height: 2.15,
-    victoryClip: 'roar', skills: [SK_SPIN, SK_QUAKE, SK_BURROW], ult: ULT_MUTANT, voice: 'beast' });
-  p2.holder.scale.setScalar(mScale); p2.holder.position.y = -mBox.min.y * mScale;
-  G.f = [p1, p2];
-  makeGhosts(p2, 5);
-  $('n1').textContent = p1.name; $('n2').textContent = p2.name;
-  buildSkillHud(p1, 1, KEY_LABEL.p1); buildSkillHud(p2, 2, KEY_LABEL.p2);
-  const sc = innerHeight * 0.9 * renderer.getPixelRatio(); for (const k in P) P[k].mat.uniforms.uScale.value = sc;
+  // 캐릭터 : 뮤턴트 원본은 모든 캐릭터 애니메이션의 기준 뼈대
+  RIG_SRC = mutantF; CLIPS = clips;
+  $('loadText').textContent = '캐릭터 준비 중...';
+  await loadFighters(['dragon', 'mutant']);
 
   window.G = G; window.THREE = THREE; window.scene = scene; window.camera = camera;
   window.DBG = { NET, SEE: SEE_U, bloom, composer, renderer, render: () => render(),
@@ -1748,7 +2799,9 @@ async function main() {
       keys.forEach(k => held.delete(k)); updateHud(); render();
     },
     tap(k) { pressed.add(k); held.add(k); if (step() !== false) pressed.clear(); held.delete(k); updateCamera(DT, camMode()); render(); },
-    MOVES, CI, cine, P,
+    MOVES, CI, cine, P, SEL, CHARS, loadFighters, projectiles,
+    async pick(a, b) { await loadFighters([a, b]); SEL.hide(); G.startMatch(); },
+    netPump(n = 1) { let c = 0; for (let i = 0; i < n; i++) { acc = Math.min(0.1, acc + DT); if (NET.pump()) c++; } flushVisual(); NET.hud(performance.now()); return c; },   // 테스트용 : 창이 숨겨져도 온라인 진행
   };
 
   // 셰이더 미리 컴파일 (첫 사용 때 멈칫하지 않도록)
@@ -1800,7 +2853,7 @@ function flushVisual() {   // 그리기 직전에 한 번만 : 뼈대 애니메�
 }
 let renderCount = 0;
 function render() { flushVisual(); updateSee(); renderer.shadowMap.needsUpdate = (renderCount++ % 2 === 0); composer.render(); }
-function camMode() { return cine.active ? 'cine' : G.phase === 'title' ? 'title' : G.phase === 'intro' ? 'intro' : (G.phase === 'roundend' && G.phaseT < 2) ? 'ko' : 'fight'; }
+function camMode() { return cine.active ? 'cine' : (G.phase === 'title' || G.phase === 'select') ? 'title' : G.phase === 'intro' ? 'intro' : (G.phase === 'roundend' && G.phaseT < 2) ? 'ko' : 'fight'; }
 const QLOCK = new URLSearchParams(location.search).has('lockq');   // 테스트용 : 자동 품질 낮추기 끄기
 let last = performance.now(), acc = 0, frameAvg = 16, lowFrames = 0, qLevel = 0;
 // =====================================================================
@@ -1825,6 +2878,7 @@ function simHash() {
   let h = 2166136261; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
   return h >>> 0;
 }
+const GAME_VER = '2026.11.22-10chars';   // 온라인 : 두 사람의 게임 버전이 같아야 대전 가능
 const NET_POINTER = 'https://api.github.com/repos/kang-jun-mo12/fighting-king-3d/contents/server.json?ref=server';   // 고정 링크용 서버 주소 파일
 const NET = {
   ws: null, url: '', connected: false, menuOpen: false, active: false, role: 0, seed: 0, D: 4,
@@ -1927,26 +2981,47 @@ const NET = {
   },
 
   // ---------------- 매칭 후 : 지연 측정 → 시작 ----------------
-  prepare() {
-    this.startT = performance.now(); this.rttSamples = [];
-    $('netWaitText').innerHTML = `상대를 찾았어요! 나는 <b>${this.role === 0 ? '드래곤 워리어 (P1)' : '뮤턴트 (P2)'}</b><br>연결 상태 확인 중...`; this.show('netWait');
+  prepare() {   // 매칭 성공 → 서로 캐릭터 고르기 (방장은 그동안 지연 측정)
+    this.startT = performance.now(); this.rttSamples = []; this.picks = [null, null]; this.readySelf = this.readyPeer = false; this.goSent = false;
+    this.menuOpen = false; $('online').classList.add('hidden');
+    SEL.show('online', this.role);
+    $('selStatus').textContent = '상대를 찾았어요! 캐릭터를 골라 주세요';
+    this.peerVer = null; this.sendR({ k: 'ver', v: GAME_VER });
+    const myStart = this.startT;
+    setTimeout(() => { if (this.startT === myStart && !this.active && this.peerVer !== GAME_VER) { this.leave(); this.endOnline('상대와 게임 버전이 달라요. 둘 다 새로고침(F5)해 주세요'); } }, 4000);
     if (this.role === 0) {
       let n = 0;
       const ping = () => { if (!this.startT || this.active) return; this.sendR({ k: 'ping', id: ++this.pingId, at: performance.now() }); if (++n < 8) setTimeout(ping, 80); };
       ping();
-      setTimeout(() => {   // 응답이 다 안 와도 1.5초 뒤엔 시작
-        if (this.active || !this.startT) return;
-        const s = this.rttSamples.slice().sort((a, b) => a - b), med = s.length ? s[s.length >> 1] : 150;
-        const D = clamp(Math.ceil(med / 2 / (DT * 1000)) + 2, 3, 12);
-        this.sendR({ k: 'go', D }); this.start(D, med);
-      }, 1500);
     }
   },
+  onPick() { this.picks[this.role] = CHARS[SEL.cur[this.role]].id; this.tryGo(); },
+  tryGo() {
+    if (this.role !== 0 || !this.picks[0] || !this.picks[1] || this.goSent) return;
+    this.goSent = true;
+    const s = this.rttSamples.slice().sort((a, b) => a - b), med = s.length ? s[s.length >> 1] : 150;
+    const D = clamp(Math.ceil(med / 2 / (DT * 1000)) + 2, 3, 12);
+    this.sendR({ k: 'go', D, picks: this.picks }); this.begin(this.picks, D, med);
+  },
+  begin(picks, D, rtt) {
+    this.goD = D; if (rtt) this.rtt = rtt;
+    SEL.cur = picks.map(id => Math.max(0, CHARS.findIndex(d => d.id === id))); SEL.lock = [true, true]; SEL.busy = true; SEL.render();
+    $('selStatus').textContent = '캐릭터 불러오는 중...';
+    loadFighters(picks).then(() => { this.readySelf = true; this.sendR({ k: 'ready' }); $('selStatus').textContent = '상대를 기다리는 중...'; this.tryStart(); })
+      .catch(e => { console.error(e); this.leave(); this.endOnline('캐릭터를 불러오지 못했어요'); });
+  },
+  tryStart() { if (this.readySelf && this.readyPeer && !this.active) { SEL.hide(); this.start(this.goD, 0); } },
   onGame(m) {
     if (m.k === 'in') { const q = this.inputs[1 - this.role]; for (let i = 0; i < m.b.length; i++) q.set(m.f + i, m.b[i]); }
     else if (m.k === 'ping') this.sendR({ k: 'pong', id: m.id, at: m.at });
     else if (m.k === 'pong') { const r = performance.now() - m.at; this.rttSamples.push(r); this.rtt = this.rtt ? this.rtt * 0.8 + r * 0.2 : r; }
-    else if (m.k === 'go') { if (!this.active) this.start(m.D, 0); }
+    else if (m.k === 'ver') { this.peerVer = m.v; if (m.v !== GAME_VER) { this.leave(); this.endOnline('상대와 게임 버전이 달라요. 둘 다 새로고침(F5)해 주세요'); } }
+    else if (m.k === 'pick') {
+      const i = 1 - this.role; this.picks[i] = m.id; SEL.cur[i] = Math.max(0, CHARS.findIndex(d => d.id === m.id)); SEL.lock[i] = true; SEL.render();
+      if (!SEL.lock[this.role]) $('selStatus').textContent = '상대가 골랐어요! 캐릭터를 골라 주세요'; this.tryGo();
+    }
+    else if (m.k === 'go') { if (!this.active && this.role === 1) this.begin(m.picks, m.D); }
+    else if (m.k === 'ready') { this.readyPeer = true; this.tryStart(); }
     else if (m.k === 'sum') { this.rsums.set(m.f, m.s); this.checkSum(m.f); }
     else if (m.k === 'fixat') { if (this.role === 1) { this.fixF = m.f; this.fixSnap = null; } }
     else if (m.k === 'fix') { if (this.role === 1 && m.f === this.fixF) this.fixSnap = m.snap; }
@@ -1967,7 +3042,7 @@ const NET = {
     G.startMatch();
     RNG = Math.random;
     acc = 0; this.lastTick = performance.now();
-    announce(this.role === 0 ? '나 : 드래곤 워리어' : '나 : 뮤턴트', 'gold');
+    announce('나 : ' + G.f[this.role].name, 'gold');
   },
 
   // ---------------- 록스텝 ----------------
@@ -2050,12 +3125,13 @@ const NET = {
     if (wasActive) {
       announce(msg, 'red');
       setTimeout(() => { if (this.active) return; G.goTitle(); clearAnnounce(); this.openMenu(); this.status(msg, 'bad'); }, 2200);
-    } else if (this.menuOpen) { this.show('netMenu'); this.status(msg, 'bad'); }
+    } else if (SEL.open && SEL.mode === 'online') { SEL.hide(); G.goTitle(); this.openMenu(); this.status(msg, 'bad'); }
+    else if (this.menuOpen) { this.show('netMenu'); this.status(msg, 'bad'); }
   },
   hud(now) {
     if (!this.active) return;
     const stall = now - this.lastTick;
-    const txt = `ONLINE · 나 ${this.role === 0 ? 'P1 드래곤' : 'P2 뮤턴트'} · 핑 ${Math.round(this.rtt)}ms · 입력지연 ${this.D}F` + (this.desync ? ` · 보정 ${this.desync}` : '') + (stall > 600 ? ' · 상대 기다리는 중...' : '');
+    const txt = `ONLINE · 나 ${this.role === 0 ? '1P' : '2P'} ${G.f[this.role].name} · 핑 ${Math.round(this.rtt)}ms · 입력지연 ${this.D}F` + (this.desync ? ` · 보정 ${this.desync}` : '') + (stall > 600 ? ' · 상대 기다리는 중...' : '');
     if (txt !== this.lastHud) { $('netHud').textContent = txt; this.lastHud = txt; $('netHud').classList.toggle('warn', stall > 600); }
     if (now - (this.lastPing || 0) > 2000) { this.lastPing = now; this.sendR({ k: 'ping', id: ++this.pingId, at: now }); }
   },
