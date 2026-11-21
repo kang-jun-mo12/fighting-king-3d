@@ -1834,7 +1834,7 @@ const NET = {
 
   // ---------------- 화면 ----------------
   el(id) { return $(id); },
-  show(part) { for (const id of ['netServerRow', 'netMenu', 'netWait']) $(id).classList.toggle('hidden', id !== part); },
+  show(part) { for (const id of ['netServerRow', 'netMenu', 'netWait']) $(id).classList.toggle('hidden', id !== part); $('netRetryRow').classList.toggle('hidden', part !== 'netServerRow'); },
   status(t, cls = '') { const e = $('netStatus'); e.textContent = t; e.className = cls; },
   openMenu() {
     this.menuOpen = true; $('online').classList.remove('hidden'); $('title').classList.add('hidden');
@@ -1873,7 +1873,7 @@ const NET = {
       if (r.ok) {
         const j = await r.json(), info = JSON.parse(atob(String(j.content).replace(/\s/g, '')));
         if (info.url) { this.fromPointer = true; return this.connect(info.url); }
-        this.show('netServerRow'); this.status('방장 서버가 꺼져 있어요. 서버가 켜지면 다시 눌러 주세요. (주소를 직접 넣어도 돼요)', 'bad'); return;
+        this.show('netServerRow'); this.status('방장 서버가 꺼져 있어요. 방장 PC에서 "온라인 서버 실행.bat"을 켠 뒤 [다시 찾기]를 눌러 주세요.', 'bad'); return;
       }
     } catch {}
     this.show('netServerRow'); this.status('방장 서버 주소를 넣어 주세요 (서버 창에 나온 trycloudflare 링크)');
@@ -2061,7 +2061,7 @@ const NET = {
   },
 };
 for (const [id, fn] of [['netQuick', () => NET.quick()], ['netCreate', () => NET.create()], ['netJoin', () => NET.join($('netCode').value)], ['netCancel', () => NET.cancel()],
-  ['netConnect', () => NET.connect($('netServer').value)], ['netBack', () => NET.closeMenu()], ['titleOnline', () => { if (G.phase === 'title') NET.openMenu(); }]]) {
+  ['netConnect', () => NET.connect($('netServer').value)], ['netRetry', () => NET.autoServer()], ['netBack', () => NET.closeMenu()], ['titleOnline', () => { if (G.phase === 'title') NET.openMenu(); }]]) {
   const el = $(id); if (el) el.addEventListener('click', fn);
 }
 
